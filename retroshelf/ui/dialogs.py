@@ -476,36 +476,6 @@ class ListDialog(QDialog):
             self.folder_edit.setText(folder)
             self.auto_scan_checkbox.setChecked(True)
 
-            roms_path = Path(folder)
-            # Buscar si existe una carpeta de medios en el mismo nivel o subcarpeta
-            media_candidate = None
-            if (roms_path / "media").is_dir():
-                media_candidate = roms_path / "media"
-            elif roms_path.parent and (roms_path.parent / "media").is_dir():
-                media_candidate = roms_path.parent / "media"
-            elif roms_path.name.lower() in ("roms", "games") and roms_path.parent:
-                cand = roms_path.parent / "Media"
-                if cand.is_dir():
-                    media_candidate = cand
-
-            if media_candidate:
-                self.media_root_edit.setText(str(media_candidate))
-                self.auto_detect_media(silent=True)
-            else:
-                # Si no está en el mismo nivel o subcarpeta, preguntar al usuario si desea indicar la carpeta Media
-                res = QMessageBox.question(
-                    self,
-                    "Carpeta de Medios no encontrada",
-                    "No se detectó una carpeta 'media' en el mismo nivel de la carpeta de juegos.\n\n"
-                    "¿Deseas buscar y seleccionar la carpeta de Medios (Media) ahora?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
-                )
-                if res == QMessageBox.Yes:
-                    self.pick_media_root()
-                else:
-                    self.auto_detect_media(silent=True)
-
     def _on_preset_selected(self, index):
         title = self.preset_combo.currentText()
         if title in PRESET_EXTENSIONS and title != "Personalizado...":
