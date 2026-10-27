@@ -323,6 +323,7 @@ class WheelLayout(BaseLayout):
             self.player.setAudioOutput(self.audio_output)
             self.player.setVideoOutput(self.video_widget)
             self.player.setLoops(QMediaPlayer.Infinite)
+            self.player.errorOccurred.connect(self._on_player_error)
 
             self._player_initialized = True
 
@@ -335,36 +336,92 @@ class WheelLayout(BaseLayout):
             print(f"[WheelLayout] No se pudo inicializar el reproductor de video: {e}")
             self._player_initialized = True  # Marcar como "intentado" para no reintentar
 
+    def _on_player_error(self, error, error_string=""):
+        if self.player:
+            try:
+                self.player.stop()
+            except Exception:
+                pass
+        self._video_stack.setCurrentIndex(0)
+
+    def set_games(self, games: list):
+        self.games = [dict(g) if hasattr(g, "keys") else g for g in games]
+        matching_ids = {g.get("id") for g in self.games}
+        if not self.current_game_id or self.current_game_id not in matching_ids:
+            self.current_game_id = self.games[0].get("id") if self.games else None
+        self.render_games()
+
     def render_games(self):
         if self.player:
-            self.player.stop()
+            try:
+                self.player.stop()
+            except Exception:
+                pass
+        if hasattr(self, "video_timer"):
+            self.video_timer.stop()
+
         self.delegate.invalidate_cache()
         self.wheel_list.blockSignals(True)
         self.wheel_list.clear()
 
+        target_item = None
         for g in self.games:
             item = QListWidgetItem()
             item.setData(Qt.UserRole, g.get("id"))
             item.setData(Qt.UserRole + 10, g)
             self.wheel_list.addItem(item)
+            if self.current_game_id and g.get("id") == self.current_game_id:
+                target_item = item
 
-        self.wheel_list.blockSignals(False)
+        if not target_item and self.wheel_list.count() > 0:
+            target_item = self.wheel_list.item(0)
+            self.current_game_id = target_item.data(Qt.UserRole)
 
-        if self.current_game_id:
-            self.select_game_by_id(self.current_game_id)
-        elif self.wheel_list.count() > 0:
-            self.wheel_list.setCurrentRow(0)
+        if target_item:
+            self.wheel_list.setCurrentItem(target_item)
+            self.wheel_list.blockSignals(False)
+            self._update_game_display(target_item.data(Qt.UserRole + 10))
+        else:
+            self.wheel_list.blockSignals(False)
+            self.current_game_id = None
+            self._clear_game_display()
 
     def select_game_by_id(self, game_id: int):
         self.current_game_id = game_id
+        target_item = None
         for i in range(self.wheel_list.count()):
             item = self.wheel_list.item(i)
             if item and item.data(Qt.UserRole) == game_id:
-                self.wheel_list.blockSignals(True)
-                self.wheel_list.setCurrentItem(item)
-                self.wheel_list.blockSignals(False)
-                self._update_game_display(item.data(Qt.UserRole + 10))
+                target_item = item
                 break
+
+        if not target_item and self.wheel_list.count() > 0:
+            target_item = self.wheel_list.item(0)
+            self.current_game_id = target_item.data(Qt.UserRole)
+
+        if target_item:
+            self.wheel_list.blockSignals(True)
+            self.wheel_list.setCurrentItem(target_item)
+            self.wheel_list.blockSignals(False)
+            self._update_game_display(target_item.data(Qt.UserRole + 10))
+        else:
+            self._clear_game_display()
+
+    def _clear_game_display(self):
+        self.title_label.setText("No hay elementos")
+        self.meta_label.setText("—")
+        self.boxart_label.clear()
+        self.boxart_label.setVisible(False)
+        self.wheel_logo_label.clear()
+        self.wheel_logo_label.setVisible(False)
+        self.current_media = {}
+        if self.player:
+            try:
+                self.player.stop()
+                self.player.setSource(QUrl())
+            except Exception:
+                pass
+        self._video_stack.setCurrentIndex(0)
 
     def _on_wheel_item_changed(self, current, previous):
         if not current:
@@ -376,13 +433,20 @@ class WheelLayout(BaseLayout):
             self._update_game_display(game)
 
     def _update_game_display(self, game: dict):
+        if not game:
+            self._clear_game_display()
+            return
+
         title = game.get("title", "")
         self.title_label.setText(title)
 
         emu = game.get("effective_name", "Sin emulador")
         plat = game.get("platform") or "Retro"
         filename = os.path.basename(game.get("rom_path", ""))
-        self.meta_label.setText(f"Plataforma: <b>{plat}</b>   |   Emulador: <b>{emu}</b><br>Archivo: <span style='color:#6d7b93;'>{filename}</span>")
+        if game.get("is_menu_target"):
+            self.meta_label.setText(f"Sistema: <b>{plat}</b>   |   Contenido: <b>{emu}</b>")
+        else:
+            self.meta_label.setText(f"Plataforma: <b>{plat}</b>   |   Emulador: <b>{emu}</b><br>Archivo: <span style='color:#6d7b93;'>{filename}</span>")
 
         # Resolver medios (boxart, wheel, video)
         rom_path = game.get("rom_path", "")
@@ -417,8 +481,12 @@ class WheelLayout(BaseLayout):
 
         # 3. Video Snap — solo si el player ya fue inicializado
         if self.player:
-            self.player.stop()
-        self.video_timer.stop()
+            try:
+                self.player.stop()
+            except Exception:
+                pass
+        if hasattr(self, "video_timer"):
+            self.video_timer.stop()
 
         video_file = self.current_media.get("video")
         if video_file and os.path.isfile(video_file):
@@ -429,6 +497,11 @@ class WheelLayout(BaseLayout):
                 # Player aún no listo: se reproducirá automáticamente al inicializar
                 self._video_stack.setCurrentIndex(0)
         else:
+            if self.player:
+                try:
+                    self.player.setSource(QUrl())
+                except Exception:
+                    pass
             self._video_stack.setCurrentIndex(0)  # mostrar placeholder
 
     def _start_video(self):
@@ -437,8 +510,11 @@ class WheelLayout(BaseLayout):
         video_file = self.current_media.get("video")
         if video_file and os.path.isfile(video_file):
             self._video_stack.setCurrentIndex(1)
-            self.player.setSource(QUrl.fromLocalFile(video_file))
-            self.player.play()
+            try:
+                self.player.setSource(QUrl.fromLocalFile(video_file))
+                self.player.play()
+            except Exception as e:
+                print(f"[WheelLayout] Error al reproducir video: {e}")
 
     def _toggle_mute(self):
         if not self.audio_output:
@@ -499,8 +575,15 @@ class WheelLayout(BaseLayout):
 
     def stop_media(self):
         """Detiene el reproductor de video al cambiar de layout."""
+        if hasattr(self, "video_timer"):
+            self.video_timer.stop()
         if self.player:
-            self.player.stop()
+            try:
+                self.player.stop()
+                self.player.setSource(QUrl())
+            except Exception:
+                pass
+        self._video_stack.setCurrentIndex(0)
 
     def hideEvent(self, event):
         # Detener video al salir o cambiar de pestaña para liberar recursos

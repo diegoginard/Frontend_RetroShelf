@@ -446,13 +446,20 @@ class MainWindow(QMainWindow):
             folder_text = f" · Carpeta: {row['roms_path']}" if ("roms_path" in row.keys() and row["roms_path"]) else ""
             self.list_meta_label.setText(f"Extensiones admitidas: <b>{exts_text}</b>{plat_text}{folder_text}")
 
-        # Sincronizar combo de layout
+        # Sincronizar combo de layout y resetear selección previa
+        layout_name = row["layout"] or "Grid"
         self.layout_combo.blockSignals(True)
-        self.layout_combo.setCurrentText(row["layout"] or "Grid")
+        self.layout_combo.setCurrentText(layout_name)
         self.layout_combo.blockSignals(False)
-        self._apply_layout_view(row["layout"] or "Grid")
 
+        # 1. Resetear selección y cache de la lista anterior
         self.current_game_id = None
+        self.games_cache = []
+
+        # 2. Aplicar vista del layout
+        self._apply_layout_view(layout_name)
+
+        # 3. Refrescar juegos y sincronizar la selección con el primer elemento
         self.refresh_games()
 
     def create_list(self):
@@ -626,10 +633,18 @@ class MainWindow(QMainWindow):
         inst.db = self.db
         self.layout_stack.setCurrentWidget(inst)
         inst.set_games(self.games_cache)
-        if self.current_game_id:
+        matching_ids = {g["id"] for g in self.games_cache} if self.games_cache else set()
+        if self.current_game_id and self.current_game_id in matching_ids:
             inst.select_game_by_id(self.current_game_id)
+            self._select_game_by_id(self.current_game_id)
         elif hasattr(inst, "get_selected_game_id") and inst.get_selected_game_id():
-            self._select_game_by_id(inst.get_selected_game_id())
+            cand_id = inst.get_selected_game_id()
+            if cand_id in matching_ids:
+                self._select_game_by_id(cand_id)
+            else:
+                self.on_game_unselected()
+        else:
+            self.on_game_unselected()
         inst.setFocus()
 
     # -------------------------------------------------------------
@@ -719,7 +734,7 @@ class MainWindow(QMainWindow):
             self.game_count_label.setText(f"{count} juego{'s' if count != 1 else ''}")
 
         matching_ids = {g["id"] for g in self.games_cache} if self.games_cache else set()
-        if self.current_game_id and self.current_game_id not in matching_ids:
+        if not self.current_game_id or self.current_game_id not in matching_ids:
             if self.games_cache:
                 self.current_game_id = self.games_cache[0]["id"]
             else:
@@ -732,7 +747,11 @@ class MainWindow(QMainWindow):
                 current_layout.select_game_by_id(self.current_game_id)
                 self._select_game_by_id(self.current_game_id)
             elif hasattr(current_layout, "get_selected_game_id") and current_layout.get_selected_game_id():
-                self._select_game_by_id(current_layout.get_selected_game_id())
+                cand_id = current_layout.get_selected_game_id()
+                if cand_id in matching_ids:
+                    self._select_game_by_id(cand_id)
+                else:
+                    self.on_game_unselected()
             else:
                 self.on_game_unselected()
 
@@ -793,7 +812,11 @@ class MainWindow(QMainWindow):
             current_layout.select_game_by_id(game_id)
 
         selected_item = next((g for g in self.games_cache if g["id"] == game_id), None)
-        if selected_item and selected_item.get("is_menu_target"):
+        if not selected_item:
+            self.on_game_unselected()
+            return
+
+        if selected_item.get("is_menu_target"):
             self.game_name.setText(f"🧭 {selected_item['title']}")
             self.game_path.setText(f"Plataforma: {selected_item['platform']}")
             self.game_size.setText(f"Sistema vinculado ({selected_item.get('effective_name', '')})")
