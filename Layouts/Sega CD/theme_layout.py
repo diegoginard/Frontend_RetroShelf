@@ -864,7 +864,7 @@ class ThemeLayout(BaseLayout):
         sx = sr.x()
         sy = sr.y()
 
-        ptr_size = int(sh * 0.30)
+        ptr_size = int(sh * 0.24)
         ptr_w = ptr_size
         ptr_h = ptr_size
 
