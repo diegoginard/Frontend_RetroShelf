@@ -368,32 +368,6 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
             if media["cartart"]:
                 break
 
-        # 5. Fallback automático a los recursos de temas (Layouts/<Sistema>/logo.png, etc.)
-        try:
-            from retroshelf.services.themes import get_all_theme_layouts
-            from retroshelf.ui.layouts import resolve_theme_name
-            themes = get_all_theme_layouts()
-            matched = resolve_theme_name(plat_name, themes) or resolve_theme_name(sys_name, themes)
-            if matched and matched in themes:
-                th_folder = Path(themes[matched]["folder"])
-                if not media["wheel"]:
-                    logo_file = th_folder / "logo.png"
-                    if logo_file.is_file():
-                        media["wheel"] = str(logo_file)
-                if not media["boxart"]:
-                    for art_name in ("console.png", "avatar.png", "boxart.png"):
-                        art_file = th_folder / art_name
-                        if art_file.is_file():
-                            media["boxart"] = str(art_file)
-                            break
-                if not media["cartart"]:
-                    for c_name in ("cartart.png", "discart.png"):
-                        cart_file = th_folder / c_name
-                        if cart_file.is_file():
-                            media["cartart"] = str(cart_file)
-                            break
-        except Exception:
-            pass
 
     # Fallbacks directos si los campos contienen rutas de archivo directas
     if row_dict:

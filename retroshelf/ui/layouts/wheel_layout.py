@@ -395,9 +395,15 @@ class WheelLayout(BaseLayout):
                 self.boxart_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
             self.boxart_label.setPixmap(pix)
+            self.boxart_label.setVisible(True)
         else:
-            cover_pix = load_cover(game.get("cover_path"), title, plat, self.boxart_label.size())
-            self.boxart_label.setPixmap(cover_pix)
+            if game.get("is_menu_target"):
+                self.boxart_label.clear()
+                self.boxart_label.setVisible(False)
+            else:
+                cover_pix = load_cover(game.get("cover_path"), title, plat, self.boxart_label.size())
+                self.boxart_label.setPixmap(cover_pix)
+                self.boxart_label.setVisible(True)
 
         # 2. Wheel Logo grande
         wheel_file = self.current_media.get("wheel")
