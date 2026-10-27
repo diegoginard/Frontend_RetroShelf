@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFileDialog, QMessageBox, QHBoxLayout, QWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QGroupBox,
     QTextEdit, QAbstractItemView, QCheckBox, QSpinBox, QFrame,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QScrollArea
 )
 from retroshelf.services.library import normalize_extensions, parse_extensions_list
 from retroshelf.services.media import detect_media_folders
@@ -34,11 +34,26 @@ class ListDialog(QDialog):
         self.all_lists = all_lists or []
         self.initial_menu_items = initial_menu_items or []
         self.setWindowTitle("Editar lista / menú" if existing else "Crear nueva lista / menú")
-        self.setMinimumWidth(600)
+        self.setMinimumWidth(620)
         self.normalized_exts = ""
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        # Layout principal del diálogo
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(14, 14, 14, 14)
+        main_layout.setSpacing(10)
+
+        # Contenedor desplazable con soporte de rueda de ratón
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 8, 0)
+        scroll_layout.setSpacing(10)
 
         # 1. Cabecera básica: Nombre, Tipo de Lista, Plataforma
         basic_group = QGroupBox("Información Principal")
@@ -64,7 +79,7 @@ class ListDialog(QDialog):
         self.layout_combo.addItems(get_available_layouts())
         form.addRow("Diseño visual", self.layout_combo)
 
-        layout.addWidget(basic_group)
+        scroll_layout.addWidget(basic_group)
 
         # 2. Grupo para Lista de Juegos (ROMs, Emulador, Extensiones)
         self.game_settings_group = QGroupBox("Configuración de Juegos y Emulador")
@@ -110,7 +125,7 @@ class ListDialog(QDialog):
             self.emulator_combo.addItem(e["name"], e["id"])
         game_form.addRow("Emulador predeterminado", self.emulator_combo)
 
-        layout.addWidget(self.game_settings_group)
+        scroll_layout.addWidget(self.game_settings_group)
 
         # 3. Grupo para Menú de Sistemas (Selección y orden de listas vinculadas)
         self.menu_settings_group = QGroupBox("Sistemas a incluir en este Menú")
@@ -159,7 +174,7 @@ class ListDialog(QDialog):
         list_and_controls.addLayout(btn_vbox)
         menu_layout.addLayout(list_and_controls)
 
-        layout.addWidget(self.menu_settings_group)
+        scroll_layout.addWidget(self.menu_settings_group)
 
         # 4. Sección de Medios y Arte (Box Art, Wheel Logos, Video Snaps)
         media_group = QGroupBox("Carpetas de Medios y Arte (Opcional)")
@@ -223,13 +238,25 @@ class ListDialog(QDialog):
         cart_holder.setLayout(cart_row)
         media_layout.addRow("Cartuchos:", cart_holder)
 
-        layout.addWidget(media_group)
+        scroll_layout.addWidget(media_group)
 
-        # 5. Botones de acción
+        scroll.setWidget(scroll_content)
+        main_layout.addWidget(scroll, 1)
+
+        # 5. Botones de acción siempre fijos y visibles en la parte inferior
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.validate_and_accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        main_layout.addWidget(buttons)
+
+        # Adaptar dinámicamente el tamaño inicial a la pantalla disponible
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            avail_geo = screen.availableGeometry()
+            target_h = min(680, int(avail_geo.height() * 0.85))
+            self.resize(620, target_h)
+        else:
+            self.resize(620, 650)
 
         # Poblar listas vinculadas
         self._populate_sublists()
@@ -321,7 +348,6 @@ class ListDialog(QDialog):
                 self.platform_edit.setText("Menú Principal")
             if not self.name_edit.text().strip():
                 self.name_edit.setText("Sistemas")
-        self.adjustSize()
 
     def _pick_media_folder(self, target_edit, dialog_title):
         current = target_edit.text().strip() or self.folder_edit.text().strip()
