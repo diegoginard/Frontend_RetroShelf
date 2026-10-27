@@ -385,7 +385,7 @@ class MainWindow(QMainWindow):
         )
 
         for row in rows:
-            is_menu = (row.get("list_type") == "menu")
+            is_menu = (row["list_type"] == "menu") if "list_type" in row.keys() else False
             if is_menu:
                 menu_items = self.db.get_menu_items(row["id"])
                 display_text = f"🧭 {row['name']} ({len(menu_items)})"
@@ -432,7 +432,7 @@ class MainWindow(QMainWindow):
         if not row:
             return
 
-        is_menu = (row.get("list_type") == "menu")
+        is_menu = (row["list_type"] == "menu") if "list_type" in row.keys() else False
         if is_menu:
             menu_items = self.db.get_menu_items(self.current_list_id)
             self.list_title.setText(f"🧭 {row['name']}")
@@ -645,7 +645,7 @@ class MainWindow(QMainWindow):
         row_list = self.db.one("SELECT * FROM game_lists WHERE id=?", (self.current_list_id,))
         term = self.search.text().strip().lower()
 
-        if row_list and row_list.get("list_type") == "menu":
+        if row_list and ("list_type" in row_list.keys() and row_list["list_type"] == "menu"):
             targets = self.db.get_menu_items(self.current_list_id)
             items = []
             for t in targets:
@@ -692,7 +692,7 @@ class MainWindow(QMainWindow):
                ORDER BY g.title COLLATE NOCASE""",
             (self.current_list_id, f"%{term}%", f"%{term}%")
         )
-        self.games_cache = rows
+        self.games_cache = [dict(r) for r in rows]
         self._render_games()
 
     def filter_games(self):
@@ -701,7 +701,7 @@ class MainWindow(QMainWindow):
     def _render_games(self):
         count = len(self.games_cache)
         current_list = self.db.one("SELECT list_type FROM game_lists WHERE id=?", (self.current_list_id,)) if self.current_list_id else None
-        if current_list and current_list.get("list_type") == "menu":
+        if current_list and ("list_type" in current_list.keys() and current_list["list_type"] == "menu"):
             self.game_count_label.setText(f"{count} sistema{'s' if count != 1 else ''}")
         else:
             self.game_count_label.setText(f"{count} juego{'s' if count != 1 else ''}")

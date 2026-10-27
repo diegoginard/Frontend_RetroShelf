@@ -245,7 +245,7 @@ class ListDialog(QDialog):
                 self.emulator_combo.setCurrentIndex(idx)
             self.layout_combo.setCurrentText(existing["layout"] or "Wheel")
 
-            list_type = existing.get("list_type", "games")
+            list_type = existing["list_type"] if "list_type" in existing.keys() else "games"
             idx_t = self.type_combo.findData(list_type)
             if idx_t >= 0:
                 self.type_combo.setCurrentIndex(idx_t)

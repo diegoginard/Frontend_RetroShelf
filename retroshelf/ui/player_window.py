@@ -324,7 +324,7 @@ class PlayerWindow(QMainWindow):
 
         for idx, row in enumerate(rows):
             name = row["name"]
-            is_menu = (row.get("list_type") == "menu")
+            is_menu = (row["list_type"] == "menu") if "list_type" in row.keys() else False
             if is_menu:
                 sub_items = self.db.get_menu_items(row["id"])
                 btn = QPushButton(f"🧭 {name} ({len(sub_items)})")
@@ -415,7 +415,7 @@ class PlayerWindow(QMainWindow):
 
         term = self.search_box.text().strip().lower()
 
-        if row.get("list_type") == "menu":
+        if "list_type" in row.keys() and row["list_type"] == "menu":
             targets = self.db.get_menu_items(self.current_list_id)
             items = []
             for t in targets:
