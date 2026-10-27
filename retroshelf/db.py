@@ -127,18 +127,6 @@ class Database:
             )
             con.commit()
 
-    def get_media_path(self, game_id: int, media_type: str) -> str | None:
-        """Resuelve la ruta a un archivo de medio (wheel, boxart, video, cartart) para un juego."""
-        from retroshelf.services.media import resolve_game_media
-        row = self.one(
-            """SELECT g.*, l.boxart_path, l.wheel_path, l.video_path, l.cartart_path, l.media_path
-               FROM games g JOIN game_lists l ON l.id = g.list_id WHERE g.id = ?""",
-            (game_id,)
-        )
-        if not row:
-            return None
-        media = resolve_game_media(dict(row))
-        return media.get(media_type)
 
     def get_menu_items(self, menu_id: int) -> list[sqlite3.Row]:
         """Obtiene las listas asociadas a un menú ordenadas por sort_order."""
