@@ -31,7 +31,7 @@ class WheelItemDelegate(QStyledItemDelegate):
         self._wheel_cache.clear()
 
     def sizeHint(self, option, index):
-        return QSize(260, 76)
+        return QSize(260, 84)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
         painter.save()
@@ -44,6 +44,10 @@ class WheelItemDelegate(QStyledItemDelegate):
             is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
             is_hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
 
+            # Opacidad: el seleccionado 100% visible, los que están arriba y abajo con mayor transparencia
+            opacity = 1.0 if is_selected else (0.75 if is_hover else 0.55)
+            painter.setOpacity(opacity)
+
             game = index.data(Qt.UserRole + 10)
             if not game:
                 return
@@ -52,8 +56,8 @@ class WheelItemDelegate(QStyledItemDelegate):
             title = game.get("title", "")
 
             # Coordenadas ajustadas para efecto de tarjeta en la rueda
-            pad_x = 8 if is_selected else 16
-            pad_y = 4
+            pad_x = 6 if is_selected else 16
+            pad_y = 2 if is_selected else 5
             card_rect = QRect(rect.x() + pad_x, rect.y() + pad_y, rect.width() - pad_x * 2, rect.height() - pad_y * 2)
 
             # Fondo del ítem
@@ -69,8 +73,8 @@ class WheelItemDelegate(QStyledItemDelegate):
                 border_color = QColor("#48547a")
                 border_width = 1.0
             else:
-                bg_color = QColor("#151824")
-                border_color = QColor("#262b3c")
+                bg_color = QColor(21, 24, 36, 180)
+                border_color = QColor(38, 43, 60, 180)
                 border_width = 1.0
 
             painter.fillPath(path, QBrush(bg_color))
@@ -90,16 +94,20 @@ class WheelItemDelegate(QStyledItemDelegate):
             wheel_pix = self._wheel_cache[game_id]
 
             if wheel_pix:
-                # Dibujar el logo wheel centrado manteniendo proporción
-                max_w = card_rect.width() - 20
-                max_h = card_rect.height() - 12
+                # Dibujar el logo wheel centrado manteniendo proporción (+20% si está seleccionado)
+                if is_selected:
+                    max_w = int((card_rect.width() - 16) * 1.20)
+                    max_h = int((card_rect.height() - 8) * 1.20)
+                else:
+                    max_w = card_rect.width() - 24
+                    max_h = card_rect.height() - 16
                 scaled = wheel_pix.scaled(QSize(max_w, max_h), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 draw_x = card_rect.x() + (card_rect.width() - scaled.width()) // 2
                 draw_y = card_rect.y() + (card_rect.height() - scaled.height()) // 2
                 painter.drawPixmap(draw_x, draw_y, scaled)
             else:
                 # Texto estilizado si no hay logo de wheel
-                font = QFont("Segoe UI", 11 if is_selected else 10, QFont.Bold)
+                font = QFont("Segoe UI", 12 if is_selected else 10, QFont.Bold)
                 painter.setFont(font)
                 painter.setPen(QColor("#ffffff" if is_selected else "#b8c2d6"))
                 text_rect = QRect(card_rect.x() + 12, card_rect.y(), card_rect.width() - 24, card_rect.height())
