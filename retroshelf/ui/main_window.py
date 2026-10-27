@@ -460,14 +460,14 @@ class MainWindow(QMainWindow):
         all_lists = self.db.all("SELECT * FROM game_lists ORDER BY name COLLATE NOCASE")
         dialog = ListDialog(emulators, self, all_lists=all_lists)
         if dialog.exec():
-            name, platform, emu_id, layout, exts, folder, auto_scan, boxart_path, wheel_path, video_path, cartart_path, list_type, selected_list_ids = dialog.values()
+            name, platform, emu_id, layout, exts, folder, auto_scan, media_path, boxart_path, wheel_path, video_path, cartart_path, list_type, selected_list_ids = dialog.values()
             try:
                 list_id = self.db.execute(
                     """INSERT INTO game_lists(
                         name, platform, default_emulator_id, layout, allowed_extensions, roms_path,
-                        boxart_path, wheel_path, video_path, cartart_path, list_type)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                    (name, platform, emu_id, layout, exts, folder, boxart_path, wheel_path, video_path, cartart_path, list_type)
+                        media_path, boxart_path, wheel_path, video_path, cartart_path, list_type)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (name, platform, emu_id, layout, exts, folder, media_path, boxart_path, wheel_path, video_path, cartart_path, list_type)
                 )
                 if list_type == "menu":
                     self.db.set_menu_items(list_id, selected_list_ids)
@@ -508,14 +508,14 @@ class MainWindow(QMainWindow):
         initial_menu_items = self.db.get_menu_items(self.current_list_id)
         dialog = ListDialog(emulators, self, existing=row, all_lists=all_lists, initial_menu_items=initial_menu_items)
         if dialog.exec():
-            name, platform, emu_id, layout, exts, folder, auto_scan, boxart_path, wheel_path, video_path, cartart_path, list_type, selected_list_ids = dialog.values()
+            name, platform, emu_id, layout, exts, folder, auto_scan, media_path, boxart_path, wheel_path, video_path, cartart_path, list_type, selected_list_ids = dialog.values()
             try:
                 self.db.execute(
                     """UPDATE game_lists
                        SET name=?, platform=?, default_emulator_id=?, layout=?, allowed_extensions=?, roms_path=?,
-                           boxart_path=?, wheel_path=?, video_path=?, cartart_path=?, list_type=?
+                           media_path=?, boxart_path=?, wheel_path=?, video_path=?, cartart_path=?, list_type=?
                        WHERE id=?""",
-                    (name, platform, emu_id, layout, exts, folder, boxart_path, wheel_path, video_path, cartart_path, list_type, self.current_list_id)
+                    (name, platform, emu_id, layout, exts, folder, media_path, boxart_path, wheel_path, video_path, cartart_path, list_type, self.current_list_id)
                 )
                 if list_type == "menu":
                     self.db.set_menu_items(self.current_list_id, selected_list_ids)

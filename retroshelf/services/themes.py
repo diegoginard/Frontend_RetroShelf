@@ -76,3 +76,143 @@ def get_theme_info(theme_name: str) -> dict | None:
             return info
     return None
 
+
+GENERIC_MEDIA_SPECS: dict[str, list[dict]] = {
+    "Grid": [
+        {
+            "key": "boxart",
+            "label": "Box Art / Carátulas",
+            "folder": "boxart",
+            "extensions": [".png", ".jpg", ".jpeg", ".webp"],
+            "required": True
+        }
+    ],
+    "Showcase": [
+        {
+            "key": "boxart",
+            "label": "Box Art / Carátulas",
+            "folder": "boxart",
+            "extensions": [".png", ".jpg", ".jpeg", ".webp"],
+            "required": True
+        },
+        {
+            "key": "video",
+            "label": "Video Snaps",
+            "folder": "videos",
+            "extensions": [".mp4", ".mkv", ".avi", ".webm"],
+            "required": False
+        }
+    ],
+    "Wheel": [
+        {
+            "key": "wheel",
+            "label": "Wheel Logos",
+            "folder": "wheel",
+            "extensions": [".png", ".webp"],
+            "required": True
+        },
+        {
+            "key": "video",
+            "label": "Video Snaps",
+            "folder": "videos",
+            "extensions": [".mp4", ".mkv", ".avi", ".webm"],
+            "required": False
+        },
+        {
+            "key": "boxart",
+            "label": "Box Art / Carátulas",
+            "folder": "boxart",
+            "extensions": [".png", ".jpg", ".jpeg", ".webp"],
+            "required": False
+        }
+    ],
+    "Banners": [
+        {
+            "key": "wheel",
+            "label": "Logos o Banners",
+            "folder": "wheel",
+            "extensions": [".png", ".webp"],
+            "required": True
+        },
+        {
+            "key": "boxart",
+            "label": "Box Art / Carátulas",
+            "folder": "boxart",
+            "extensions": [".png", ".jpg", ".jpeg", ".webp"],
+            "required": False
+        }
+    ],
+    "Detalles": [
+        {
+            "key": "boxart",
+            "label": "Box Art / Carátulas",
+            "folder": "boxart",
+            "extensions": [".png", ".jpg", ".jpeg", ".webp"],
+            "required": True
+        }
+    ]
+}
+
+
+def get_layout_media_spec(layout_name: str) -> list[dict]:
+    """
+    Obtiene la especificación de medios requeridos por un layout:
+    1. Si es un tema de sistema, busca 'layout.json' en su carpeta.
+    2. Si es un layout genérico estándar, retorna su especificación por defecto.
+    """
+    import json
+
+    if not layout_name:
+        return GENERIC_MEDIA_SPECS.get("Wheel", [])
+
+    info = get_theme_info(layout_name)
+    if info and info.get("folder"):
+        th_folder = Path(info["folder"])
+        json_file = th_folder / "layout.json"
+        if json_file.is_file():
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and "media" in data and isinstance(data["media"], list):
+                        return data["media"]
+            except Exception as e:
+                print(f"[RetroShelf] Error al leer {json_file}: {e}")
+
+    # Layouts genéricos estándar
+    for name, spec in GENERIC_MEDIA_SPECS.items():
+        if layout_name.lower() == name.lower():
+            return spec
+
+    # Fallback si no se encontró layout.json ni es genérico conocido
+    return [
+        {
+            "key": "video",
+            "label": "Video Snaps",
+            "folder": "videos",
+            "extensions": [".mp4", ".mkv", ".avi", ".webm"],
+            "required": True
+        },
+        {
+            "key": "wheel",
+            "label": "Wheel Logos",
+            "folder": "wheel",
+            "extensions": [".png", ".webp"],
+            "required": True
+        },
+        {
+            "key": "cartart",
+            "label": "Cartuchos",
+            "folder": "cartart",
+            "extensions": [".png", ".webp"],
+            "required": True
+        },
+        {
+            "key": "boxart",
+            "label": "Box Art / Carátulas",
+            "folder": "boxart",
+            "extensions": [".png", ".jpg", ".jpeg", ".webp"],
+            "required": False
+        }
+    ]
+
+

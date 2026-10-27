@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 from retroshelf.services.library import normalize_extensions, parse_extensions_list
 from retroshelf.services.media import detect_media_folders
+from retroshelf.services.themes import get_layout_media_spec
 
 PRESET_EXTENSIONS = {
     "Personalizado...": ("", ""),
@@ -176,67 +177,44 @@ class ListDialog(QDialog):
 
         scroll_layout.addWidget(self.menu_settings_group)
 
-        # 4. Sección de Medios y Arte (Box Art, Wheel Logos, Video Snaps)
+        # 4. Sección de Medios y Arte (especificada dinámicamente según el diseño visual)
         media_group = QGroupBox("Carpetas de Medios y Arte (Opcional)")
+        self.media_group = media_group
         media_layout = QFormLayout(media_group)
         media_layout.setSpacing(8)
+
+        # Carpeta raíz de Medios
+        self.media_root_edit = QLineEdit()
+        self.media_root_edit.setPlaceholderText("Carpeta principal 'media' (ej: C:/Juegos/SNES/media)...")
+        browse_media_root_btn = QPushButton("Examinar…")
+        browse_media_root_btn.clicked.connect(self.pick_media_root)
+
+        media_root_row = QHBoxLayout()
+        media_root_row.setContentsMargins(0, 0, 0, 0)
+        media_root_row.addWidget(self.media_root_edit, 1)
+        media_root_row.addWidget(browse_media_root_btn)
+        media_root_widget = QWidget()
+        media_root_widget.setLayout(media_root_row)
+        media_layout.addRow("Carpeta Media (Raíz):", media_root_widget)
 
         self.auto_det_row_widget = QWidget()
         auto_det_row = QHBoxLayout(self.auto_det_row_widget)
         auto_det_row.setContentsMargins(0, 0, 0, 0)
-        auto_det_btn = QPushButton("🔍 Auto-detectar medios desde la carpeta de juegos")
-        auto_det_btn.clicked.connect(self.auto_detect_media)
+        auto_det_btn = QPushButton("🔍 Auto-detectar subcarpetas según el diseño visual")
+        auto_det_btn.clicked.connect(lambda: self.auto_detect_media(silent=False))
         auto_det_row.addWidget(auto_det_btn)
         auto_det_row.addStretch()
         media_layout.addRow("", self.auto_det_row_widget)
 
-        # 1. Box Art
-        self.boxart_edit = QLineEdit()
-        self.boxart_edit.setPlaceholderText("Carpeta de carátulas / box art (ej: media/boxart)...")
-        browse_box_btn = QPushButton("Examinar…")
-        browse_box_btn.clicked.connect(lambda: self._pick_media_folder(self.boxart_edit, "Seleccionar carpeta de Box Art"))
-        box_row = QHBoxLayout()
-        box_row.addWidget(self.boxart_edit, 1)
-        box_row.addWidget(browse_box_btn)
-        box_holder = QWidget()
-        box_holder.setLayout(box_row)
-        media_layout.addRow("Box Art (Carátulas):", box_holder)
+        # Contenedor dinámico de medios específicos según el layout elegido
+        self.dynamic_media_container = QWidget()
+        self.dynamic_media_layout = QFormLayout(self.dynamic_media_container)
+        self.dynamic_media_layout.setContentsMargins(0, 0, 0, 0)
+        self.dynamic_media_layout.setSpacing(8)
+        media_layout.addRow(self.dynamic_media_container)
 
-        # 2. Wheel Logos
-        self.wheel_edit = QLineEdit()
-        self.wheel_edit.setPlaceholderText("Carpeta de logos transparentes (ej: media/wheel)...")
-        browse_wheel_btn = QPushButton("Examinar…")
-        browse_wheel_btn.clicked.connect(lambda: self._pick_media_folder(self.wheel_edit, "Seleccionar carpeta de Wheel Logos"))
-        wheel_row = QHBoxLayout()
-        wheel_row.addWidget(self.wheel_edit, 1)
-        wheel_row.addWidget(browse_wheel_btn)
-        wheel_holder = QWidget()
-        wheel_holder.setLayout(wheel_row)
-        media_layout.addRow("Wheel (Logos):", wheel_holder)
-
-        # 3. Video Snaps
-        self.video_edit = QLineEdit()
-        self.video_edit.setPlaceholderText("Carpeta de video snaps (ej: media/videos)...")
-        browse_vid_btn = QPushButton("Examinar…")
-        browse_vid_btn.clicked.connect(lambda: self._pick_media_folder(self.video_edit, "Seleccionar carpeta de Video Snaps"))
-        vid_row = QHBoxLayout()
-        vid_row.addWidget(self.video_edit, 1)
-        vid_row.addWidget(browse_vid_btn)
-        vid_holder = QWidget()
-        vid_holder.setLayout(vid_row)
-        media_layout.addRow("Video Snaps (.mp4):", vid_holder)
-
-        # 4. Cart Art
-        self.cartart_edit = QLineEdit()
-        self.cartart_edit.setPlaceholderText("Carpeta de cartuchos (ej: media/cartart)...")
-        browse_cart_btn = QPushButton("Examinar…")
-        browse_cart_btn.clicked.connect(lambda: self._pick_media_folder(self.cartart_edit, "Seleccionar carpeta de Cartuchos"))
-        cart_row = QHBoxLayout()
-        cart_row.addWidget(self.cartart_edit, 1)
-        cart_row.addWidget(browse_cart_btn)
-        cart_holder = QWidget()
-        cart_holder.setLayout(cart_row)
-        media_layout.addRow("Cartuchos:", cart_holder)
+        self.media_edits = {}
+        self._media_values = {}
 
         scroll_layout.addWidget(media_group)
 
@@ -277,16 +255,22 @@ class ListDialog(QDialog):
             if idx_t >= 0:
                 self.type_combo.setCurrentIndex(idx_t)
 
+            if "media_path" in existing.keys() and existing["media_path"]:
+                self.media_root_edit.setText(existing["media_path"])
             if "boxart_path" in existing.keys() and existing["boxart_path"]:
-                self.boxart_edit.setText(existing["boxart_path"])
+                self._media_values["boxart"] = existing["boxart_path"]
             if "wheel_path" in existing.keys() and existing["wheel_path"]:
-                self.wheel_edit.setText(existing["wheel_path"])
+                self._media_values["wheel"] = existing["wheel_path"]
             if "video_path" in existing.keys() and existing["video_path"]:
-                self.video_edit.setText(existing["video_path"])
+                self._media_values["video"] = existing["video_path"]
             if "cartart_path" in existing.keys() and existing["cartart_path"]:
-                self.cartart_edit.setText(existing["cartart_path"])
+                self._media_values["cartart"] = existing["cartart_path"]
         else:
             self.type_combo.setCurrentIndex(0)
+
+        # Conectar cambio de layout para reconstruir dinámicamente las carpetas de medios esperadas
+        self.layout_combo.currentTextChanged.connect(self._rebuild_dynamic_media_ui)
+        self._rebuild_dynamic_media_ui()
 
         self._on_type_changed()
 
@@ -349,58 +333,173 @@ class ListDialog(QDialog):
             if not self.name_edit.text().strip():
                 self.name_edit.setText("Sistemas")
 
+    def _rebuild_dynamic_media_ui(self):
+        """
+        Reconstruye dinámicamente las filas de medios según lo especificado en el layout.json
+        (o especificación estándar) del diseño visual seleccionado.
+        Muestra únicamente los campos solicitados por dicho diseño junto con las extensiones esperadas.
+        """
+        # 1. Guardar cualquier cambio actual que haya introducido el usuario
+        for key, edit in self.media_edits.items():
+            txt = edit.text().strip()
+            if txt:
+                self._media_values[key] = txt
+
+        # 2. Limpiar widgets anteriores
+        while self.dynamic_media_layout.count():
+            item = self.dynamic_media_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        self.media_edits.clear()
+
+        # 3. Leer especificación del diseño visual actual
+        layout_name = self.layout_combo.currentText()
+        spec = get_layout_media_spec(layout_name)
+
+        # 4. Crear solo las filas que el diseño requiere
+        for item in spec:
+            key = item.get("key", "")
+            label = item.get("label", key.capitalize())
+            folder_name = item.get("folder", key)
+            exts = item.get("extensions", [])
+            req = item.get("required", False)
+
+            ext_str = ", ".join(exts) if exts else ""
+            req_marker = " *" if req else ""
+            if ext_str:
+                label_text = f"{label} ({ext_str}){req_marker}:"
+            else:
+                label_text = f"{label}{req_marker}:"
+
+            edit = QLineEdit()
+            edit.setPlaceholderText(f"Carpeta de {label} (ej: media/{folder_name})...")
+            if key in self._media_values:
+                edit.setText(self._media_values[key])
+
+            browse_btn = QPushButton("Examinar…")
+            browse_btn.clicked.connect(lambda checked=False, e=edit, l=label: self._pick_media_folder(e, f"Seleccionar carpeta de {l}"))
+
+            row_layout = QHBoxLayout()
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(edit, 1)
+            row_layout.addWidget(browse_btn)
+
+            row_widget = QWidget()
+            row_widget.setLayout(row_layout)
+
+            self.dynamic_media_layout.addRow(label_text, row_widget)
+            self.media_edits[key] = edit
+
+    @property
+    def boxart_edit(self):
+        return self.media_edits.get("boxart")
+
+    @property
+    def wheel_edit(self):
+        return self.media_edits.get("wheel")
+
+    @property
+    def video_edit(self):
+        return self.media_edits.get("video")
+
+    @property
+    def cartart_edit(self):
+        return self.media_edits.get("cartart")
+
     def _pick_media_folder(self, target_edit, dialog_title):
-        current = target_edit.text().strip() or self.folder_edit.text().strip()
+        current = target_edit.text().strip() or self.media_root_edit.text().strip() or self.folder_edit.text().strip()
         folder = QFileDialog.getExistingDirectory(self, dialog_title, current or "")
         if folder:
             target_edit.setText(folder)
+            for k, ed in self.media_edits.items():
+                if ed == target_edit:
+                    self._media_values[k] = folder
 
-    def auto_detect_media(self):
+    def pick_media_root(self):
+        current = self.media_root_edit.text().strip() or self.folder_edit.text().strip()
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Seleccionar carpeta principal de Medios (Media)",
+            current or ""
+        )
+        if folder:
+            self.media_root_edit.setText(folder)
+            self.auto_detect_media(silent=False)
+
+    def auto_detect_media(self, silent=False):
         base_folder = self.folder_edit.text().strip()
-        if not base_folder:
-            QMessageBox.information(self, "Carpeta requerida", "Seleccioná primero la carpeta de juegos para auto-detectar.")
+        media_root = self.media_root_edit.text().strip()
+        if not base_folder and not media_root:
+            if not silent:
+                QMessageBox.information(
+                    self,
+                    "Carpeta requerida",
+                    "Seleccioná primero la carpeta de juegos o la de Medios para auto-detectar."
+                )
             return
-        det = detect_media_folders(base_folder)
-        found_any = False
-        if det.get("boxart_path"):
-            self.boxart_edit.setText(det["boxart_path"])
-            found_any = True
-        if det.get("wheel_path"):
-            self.wheel_edit.setText(det["wheel_path"])
-            found_any = True
-        if det.get("video_path"):
-            self.video_edit.setText(det["video_path"])
-            found_any = True
-        if det.get("cartart_path"):
-            self.cartart_edit.setText(det["cartart_path"])
-            found_any = True
 
-        if found_any:
-            QMessageBox.information(self, "Medios detectados", "¡Carpetas de medios detectadas y vinculadas exitosamente!")
-        else:
-            QMessageBox.information(self, "Búsqueda finalizada", "No se encontraron subcarpetas estándar (boxart, wheel, videos) en el directorio.")
+        spec = get_layout_media_spec(self.layout_combo.currentText())
+        det = detect_media_folders(base_folder, media_root=media_root, media_spec=spec)
+        found_any = False
+
+        if det.get("media_path") and not self.media_root_edit.text().strip():
+            self.media_root_edit.setText(det["media_path"])
+
+        for key, edit in self.media_edits.items():
+            field = f"{key}_path"
+            if field in det and det[field]:
+                edit.setText(det[field])
+                self._media_values[key] = det[field]
+                found_any = True
+
+        if not silent:
+            if found_any:
+                QMessageBox.information(self, "Medios detectados", "¡Carpetas de medios detectadas y vinculadas exitosamente según el diseño visual!")
+            else:
+                QMessageBox.information(self, "Búsqueda finalizada", "No se encontraron subcarpetas para los medios requeridos en el directorio.")
 
     def pick_folder(self):
         current = self.folder_edit.text().strip()
         folder = QFileDialog.getExistingDirectory(
             self,
-            "Seleccionar carpeta de juegos",
+            "Seleccionar carpeta de juegos (ROMs)",
             current or ""
         )
         if folder:
             self.folder_edit.setText(folder)
             self.auto_scan_checkbox.setChecked(True)
-            # Intentar auto-detección silenciosa si los campos de medios están vacíos
-            if not self.boxart_edit.text().strip() and not self.wheel_edit.text().strip():
-                det = detect_media_folders(folder)
-                if det.get("boxart_path"):
-                    self.boxart_edit.setText(det["boxart_path"])
-                if det.get("wheel_path"):
-                    self.wheel_edit.setText(det["wheel_path"])
-                if det.get("video_path"):
-                    self.video_edit.setText(det["video_path"])
-                if det.get("cartart_path"):
-                    self.cartart_edit.setText(det["cartart_path"])
+
+            roms_path = Path(folder)
+            # Buscar si existe una carpeta de medios en el mismo nivel o subcarpeta
+            media_candidate = None
+            if (roms_path / "media").is_dir():
+                media_candidate = roms_path / "media"
+            elif roms_path.parent and (roms_path.parent / "media").is_dir():
+                media_candidate = roms_path.parent / "media"
+            elif roms_path.name.lower() in ("roms", "games") and roms_path.parent:
+                cand = roms_path.parent / "Media"
+                if cand.is_dir():
+                    media_candidate = cand
+
+            if media_candidate:
+                self.media_root_edit.setText(str(media_candidate))
+                self.auto_detect_media(silent=True)
+            else:
+                # Si no está en el mismo nivel o subcarpeta, preguntar al usuario si desea indicar la carpeta Media
+                res = QMessageBox.question(
+                    self,
+                    "Carpeta de Medios no encontrada",
+                    "No se detectó una carpeta 'media' en el mismo nivel de la carpeta de juegos.\n\n"
+                    "¿Deseas buscar y seleccionar la carpeta de Medios (Media) ahora?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if res == QMessageBox.Yes:
+                    self.pick_media_root()
+                else:
+                    self.auto_detect_media(silent=True)
 
     def _on_preset_selected(self, index):
         title = self.preset_combo.currentText()
@@ -482,6 +581,16 @@ class ListDialog(QDialog):
                 if item.checkState() == Qt.Checked:
                     selected_ids.append(item.data(Qt.UserRole))
 
+        # Sincronizar últimos valores de los edits
+        for k, ed in self.media_edits.items():
+            self._media_values[k] = ed.text().strip()
+
+        media_path = self.media_root_edit.text().strip()
+        boxart_path = self._media_values.get("boxart", "")
+        wheel_path = self._media_values.get("wheel", "")
+        video_path = self._media_values.get("video", "")
+        cartart_path = self._media_values.get("cartart", "")
+
         return (
             self.name_edit.text().strip(),
             self.platform_edit.text().strip(),
@@ -490,10 +599,11 @@ class ListDialog(QDialog):
             self.normalized_exts if list_type == "games" else "",
             self.folder_edit.text().strip() if list_type == "games" else "",
             self.auto_scan_checkbox.isChecked() if list_type == "games" else False,
-            self.boxart_edit.text().strip(),
-            self.wheel_edit.text().strip(),
-            self.video_edit.text().strip(),
-            self.cartart_edit.text().strip(),
+            media_path,
+            boxart_path,
+            wheel_path,
+            video_path,
+            cartart_path,
             list_type,
             selected_ids,
         )

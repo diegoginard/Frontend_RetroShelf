@@ -1,0 +1,34 @@
+{
+  "name": "Sony Playstation",
+  "description": "Layout temático de Sony PlayStation con TV CRT, disco PS1 y rueda",
+  "media": [
+    {
+      "key": "video",
+      "label": "Video Snaps",
+      "folder": "videos",
+      "extensions": [".mp4", ".mkv", ".avi", ".webm"],
+      "required": true
+    },
+    {
+      "key": "wheel",
+      "label": "Wheel Logos",
+      "folder": "wheel",
+      "extensions": [".png", ".webp"],
+      "required": true
+    },
+    {
+      "key": "cartart",
+      "label": "Discos / CDs",
+      "folder": "cartart",
+      "extensions": [".png", ".webp"],
+      "required": true
+    },
+    {
+      "key": "boxart",
+      "label": "Box Art / Carátulas",
+      "folder": "boxart",
+      "extensions": [".png", ".jpg", ".jpeg", ".webp"],
+      "required": false
+    }
+  ]
+}
