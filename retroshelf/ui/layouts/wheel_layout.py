@@ -31,7 +31,7 @@ class WheelItemDelegate(QStyledItemDelegate):
         self._wheel_cache.clear()
 
     def sizeHint(self, option, index):
-        return QSize(260, 84)
+        return QSize(260, 70)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
         painter.save()

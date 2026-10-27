@@ -233,7 +233,9 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
         # 3. Video Snaps
         video_folder = row_dict.get("video_path") or (str(m_root_path / "videos") if m_root_path and (m_root_path / "videos").is_dir() else None)
         if video_folder and os.path.isdir(video_folder):
-            media["video"] = find_media_file(video_folder, stem, VIDEO_EXTS)
+            v_found = find_media_file(video_folder, stem, VIDEO_EXTS)
+            media["video"] = v_found
+            media["snap"] = v_found
 
         # 4. Cart Art
         cart_folder = row_dict.get("cartart_path") or (str(m_root_path / "cartart") if m_root_path and (m_root_path / "cartart").is_dir() else None)
@@ -242,41 +244,131 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
 
     # Resolución de medios para Menú de Sistemas (cuando el item representa una lista/consola)
     if (not stem or row_dict.get("is_menu_target")) and row_dict:
-        sys_name = row_dict.get("title") or ""
-        plat_name = row_dict.get("platform") or sys_name
-        candidates = [c for c in (sys_name, plat_name) if c]
+        import re
+        sys_name = (row_dict.get("title") or "").strip()
+        plat_name = (row_dict.get("platform") or "").strip()
 
-        root_m = row_dict.get("media_path")
-        m_root_path = Path(root_m) if root_m and os.path.isdir(root_m) else None
+        # Generar todas las variaciones posibles de nombre para coincidir con los archivos de medios
+        candidates = []
+        for n in (sys_name, plat_name):
+            if not n:
+                continue
+            if n not in candidates:
+                candidates.append(n)
+            # Sin contenido entre paréntesis, ej: "Super Nintendo (SNES)" -> "Super Nintendo"
+            clean_paren = re.sub(r"\s*\(.*?\)", "", n).strip()
+            if clean_paren and clean_paren not in candidates:
+                candidates.append(clean_paren)
+            # Reemplazar barras o guiones
+            clean_slash = n.replace("/", " - ").replace("\\", " - ").strip()
+            if clean_slash and clean_slash not in candidates:
+                candidates.append(clean_slash)
 
-        # 1. Wheel Logos desde carpeta wheel_path o fallback
-        wheel_folder = row_dict.get("wheel_path") or (str(m_root_path / "wheel") if m_root_path and (m_root_path / "wheel").is_dir() else None)
-        if wheel_folder and os.path.isdir(wheel_folder) and not media["wheel"]:
+        # Carpetas base candidatas del menú (o de la lista)
+        candidate_roots: list[Path] = []
+        for k in ("menu_media_path", "media_path"):
+            v = row_dict.get(k)
+            if v and os.path.isdir(v):
+                p = Path(v)
+                if p not in candidate_roots:
+                    candidate_roots.append(p)
+                if (p / "media").is_dir() and (p / "media") not in candidate_roots:
+                    candidate_roots.append(p / "media")
+
+        # 1. Wheel Logos desde la carpeta wheel del menú o de la lista
+        wheel_dirs: list[Path] = []
+        for k in ("menu_wheel_path", "wheel_path"):
+            v = row_dict.get(k)
+            if v and os.path.isdir(v):
+                p = Path(v)
+                if p not in wheel_dirs:
+                    wheel_dirs.append(p)
+        for r in candidate_roots:
+            for sub in ("wheel", "wheels", "logo", "logos", "clearlogo", "clearlogos"):
+                sp = r / sub
+                if sp.is_dir() and sp not in wheel_dirs:
+                    wheel_dirs.append(sp)
+
+        for wdir in wheel_dirs:
             for cand in candidates:
-                found = find_media_file(wheel_folder, cand, IMAGE_EXTS)
+                found = find_media_file(wdir, cand, IMAGE_EXTS)
                 if found:
                     media["wheel"] = found
                     break
+            if media["wheel"]:
+                break
 
-        # 2. Box Art desde carpeta boxart_path o fallback
-        box_folder = row_dict.get("boxart_path") or (str(m_root_path / "boxart") if m_root_path and (m_root_path / "boxart").is_dir() else None)
-        if box_folder and os.path.isdir(box_folder) and not media["boxart"]:
+        # 2. Video Snaps desde la carpeta video del menú o de la lista
+        video_dirs: list[Path] = []
+        for k in ("menu_video_path", "video_path"):
+            v = row_dict.get(k)
+            if v and os.path.isdir(v):
+                p = Path(v)
+                if p not in video_dirs:
+                    video_dirs.append(p)
+        for r in candidate_roots:
+            for sub in ("videos", "video", "snap", "snaps", "video_snaps"):
+                sp = r / sub
+                if sp.is_dir() and sp not in video_dirs:
+                    video_dirs.append(sp)
+
+        for vdir in video_dirs:
             for cand in candidates:
-                found = find_media_file(box_folder, cand, IMAGE_EXTS)
+                found = find_media_file(vdir, cand, VIDEO_EXTS)
+                if found:
+                    media["video"] = found
+                    media["snap"] = found
+                    break
+            if media["video"]:
+                break
+
+        # 3. Box Art desde la carpeta boxart del menú o de la lista
+        box_dirs: list[Path] = []
+        for k in ("menu_boxart_path", "boxart_path"):
+            v = row_dict.get(k)
+            if v and os.path.isdir(v):
+                p = Path(v)
+                if p not in box_dirs:
+                    box_dirs.append(p)
+        for r in candidate_roots:
+            for sub in ("boxart", "box", "boxes", "covers", "cover", "2d_boxes", "3d_boxes"):
+                sp = r / sub
+                if sp.is_dir() and sp not in box_dirs:
+                    box_dirs.append(sp)
+
+        for bdir in box_dirs:
+            for cand in candidates:
+                found = find_media_file(bdir, cand, IMAGE_EXTS)
                 if found:
                     media["boxart"] = found
                     break
+            if media["boxart"]:
+                break
 
-        # 3. Video Snaps desde carpeta video_path o fallback
-        video_folder = row_dict.get("video_path") or (str(m_root_path / "videos") if m_root_path and (m_root_path / "videos").is_dir() else None)
-        if video_folder and os.path.isdir(video_folder) and not media["video"]:
+        # 4. Cart Art desde la carpeta cartart del menú o de la lista
+        cart_dirs: list[Path] = []
+        for k in ("menu_cartart_path", "cartart_path"):
+            v = row_dict.get(k)
+            if v and os.path.isdir(v):
+                p = Path(v)
+                if p not in cart_dirs:
+                    cart_dirs.append(p)
+        for r in candidate_roots:
+            for sub in ("cartart", "cart", "carts", "cartridge", "discart", "disc", "discs", "cd", "cds"):
+                sp = r / sub
+                if sp.is_dir() and sp not in cart_dirs:
+                    cart_dirs.append(sp)
+
+        for cdir in cart_dirs:
             for cand in candidates:
-                found = find_media_file(video_folder, cand, VIDEO_EXTS)
+                found = find_media_file(cdir, cand, IMAGE_EXTS)
                 if found:
-                    media["video"] = found
+                    media["cartart"] = found
                     break
+            if media["cartart"]:
+                break
 
-        # 4. Fallback automático a los recursos de temas (Layouts/<Sistema>/logo.png, etc.)
+        # 5. Fallback automático a los recursos de temas (Layouts/<Sistema>/logo.png, etc.)
         try:
             from retroshelf.services.themes import get_all_theme_layouts
             from retroshelf.ui.layouts import resolve_theme_name
@@ -295,9 +387,11 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
                             media["boxart"] = str(art_file)
                             break
                 if not media["cartart"]:
-                    cart_file = th_folder / "cartart.png"
-                    if cart_file.is_file():
-                        media["cartart"] = str(cart_file)
+                    for c_name in ("cartart.png", "discart.png"):
+                        cart_file = th_folder / c_name
+                        if cart_file.is_file():
+                            media["cartart"] = str(cart_file)
+                            break
         except Exception:
             pass
 

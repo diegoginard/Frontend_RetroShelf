@@ -576,11 +576,15 @@ class ThemeLayout(BaseLayout):
             return self._wheel_pixmaps[gid]
 
         wheel_path = None
-        if self.db and gid:
+        if not game.get("is_menu_target") and self.db and gid:
             wheel_path = self.db.get_media_path(gid, "wheel")
 
         if not wheel_path or not os.path.isfile(wheel_path):
-            wheel_path = game.get("wheel_path") or game.get("logo_path")
+            media = resolve_game_media(game)
+            if media.get("wheel"):
+                wheel_path = media["wheel"]
+            elif game.get("wheel_path") and os.path.isfile(game.get("wheel_path")):
+                wheel_path = game["wheel_path"]
 
         if wheel_path and os.path.isfile(wheel_path):
             p = QPixmap(wheel_path)

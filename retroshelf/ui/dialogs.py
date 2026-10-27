@@ -327,7 +327,7 @@ class ListDialog(QDialog):
         is_menu = (self.type_combo.currentData() == "menu")
         self.game_settings_group.setVisible(not is_menu)
         self.menu_settings_group.setVisible(is_menu)
-        self.auto_det_row_widget.setVisible(not is_menu)
+        self.auto_det_row_widget.setVisible(True)
         if is_menu:
             if not self.platform_edit.text().strip():
                 self.platform_edit.setText("Menú Principal")

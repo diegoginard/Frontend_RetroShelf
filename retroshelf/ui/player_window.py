@@ -416,6 +416,12 @@ class PlayerWindow(QMainWindow):
         term = self.search_box.text().strip().lower()
 
         if "list_type" in row.keys() and row["list_type"] == "menu":
+            menu_media_path = row["media_path"] if "media_path" in row.keys() else ""
+            menu_boxart_path = row["boxart_path"] if "boxart_path" in row.keys() else ""
+            menu_wheel_path = row["wheel_path"] if "wheel_path" in row.keys() else ""
+            menu_video_path = row["video_path"] if "video_path" in row.keys() else ""
+            menu_cartart_path = row["cartart_path"] if "cartart_path" in row.keys() else ""
+
             targets = self.db.get_menu_items(self.current_list_id)
             items = []
             for t in targets:
@@ -434,10 +440,16 @@ class PlayerWindow(QMainWindow):
                     "rom_path": "",
                     "list_id": self.current_list_id,
                     "platform": platform,
-                    "boxart_path": t_dict.get("boxart_path") or "",
-                    "wheel_path": t_dict.get("wheel_path") or "",
-                    "video_path": t_dict.get("video_path") or "",
-                    "cartart_path": t_dict.get("cartart_path") or "",
+                    "media_path": menu_media_path or t_dict.get("media_path") or "",
+                    "boxart_path": menu_boxart_path or t_dict.get("boxart_path") or "",
+                    "wheel_path": menu_wheel_path or t_dict.get("wheel_path") or "",
+                    "video_path": menu_video_path or t_dict.get("video_path") or "",
+                    "cartart_path": menu_cartart_path or t_dict.get("cartart_path") or "",
+                    "menu_media_path": menu_media_path,
+                    "menu_wheel_path": menu_wheel_path,
+                    "menu_video_path": menu_video_path,
+                    "menu_boxart_path": menu_boxart_path,
+                    "menu_cartart_path": menu_cartart_path,
                     "effective_name": f"{g_count} juegos",
                     "source": "menu",
                 })
