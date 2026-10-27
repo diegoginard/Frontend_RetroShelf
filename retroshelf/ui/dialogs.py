@@ -5,7 +5,8 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, QPushButton,
     QDialogButtonBox, QFileDialog, QMessageBox, QHBoxLayout, QWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QGroupBox,
-    QTextEdit, QAbstractItemView, QCheckBox, QSpinBox, QFrame
+    QTextEdit, QAbstractItemView, QCheckBox, QSpinBox, QFrame,
+    QListWidget, QListWidgetItem
 )
 from retroshelf.services.library import normalize_extensions, parse_extensions_list
 from retroshelf.services.media import detect_media_folders
@@ -25,39 +26,60 @@ PRESET_EXTENSIONS = {
 
 class ListDialog(QDialog):
     """
-    Diálogo para crear o editar una lista de juegos con configuración manual
-    de extensiones separadas por punto y coma (;) y selección opcional de carpeta de juegos.
+    Diálogo para crear o editar una lista de juegos o un Menú de Sistemas (lista de listas).
     """
-    def __init__(self, emulators, parent=None, existing=None):
+    def __init__(self, emulators, parent=None, existing=None, all_lists=None, initial_menu_items=None):
         super().__init__(parent)
         self.existing = existing
-        self.setWindowTitle("Editar lista" if existing else "Crear nueva lista")
-        self.setMinimumWidth(560)
+        self.all_lists = all_lists or []
+        self.initial_menu_items = initial_menu_items or []
+        self.setWindowTitle("Editar lista / menú" if existing else "Crear nueva lista / menú")
+        self.setMinimumWidth(600)
         self.normalized_exts = ""
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(10)
 
-        form = QFormLayout()
+        # 1. Cabecera básica: Nombre, Tipo de Lista, Plataforma
+        basic_group = QGroupBox("Información Principal")
+        form = QFormLayout(basic_group)
+        form.setSpacing(8)
 
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("Ej: Super Nintendo, Juegos de Lucha...")
-        form.addRow("Nombre de la lista *", self.name_edit)
+        self.name_edit.setPlaceholderText("Ej: Super Nintendo, Menú de Consolas...")
+        form.addRow("Nombre *", self.name_edit)
+
+        self.type_combo = QComboBox()
+        self.type_combo.addItem("🎮 Lista de juegos (ROMs y emulador)", "games")
+        self.type_combo.addItem("🧭 Menú de sistemas (Lista de listas)", "menu")
+        self.type_combo.currentIndexChanged.connect(self._on_type_changed)
+        form.addRow("Tipo de lista", self.type_combo)
 
         self.platform_edit = QLineEdit()
-        self.platform_edit.setPlaceholderText("Ej: Super Nintendo, GBA, PS1...")
-        form.addRow("Plataforma o consola", self.platform_edit)
+        self.platform_edit.setPlaceholderText("Ej: Super Nintendo, GBA, Arcade...")
+        form.addRow("Plataforma o etiqueta", self.platform_edit)
 
-        # Plantillas rápidas opcionales para facilitar al usuario, sin restringir edición
+        from retroshelf.ui.layouts import get_available_layouts
+        self.layout_combo = QComboBox()
+        self.layout_combo.addItems(get_available_layouts())
+        form.addRow("Diseño visual", self.layout_combo)
+
+        layout.addWidget(basic_group)
+
+        # 2. Grupo para Lista de Juegos (ROMs, Emulador, Extensiones)
+        self.game_settings_group = QGroupBox("Configuración de Juegos y Emulador")
+        game_form = QFormLayout(self.game_settings_group)
+        game_form.setSpacing(8)
+
         self.preset_combo = QComboBox()
         for title in PRESET_EXTENSIONS.keys():
             self.preset_combo.addItem(title)
         self.preset_combo.currentIndexChanged.connect(self._on_preset_selected)
-        form.addRow("Plantilla sugerida", self.preset_combo)
+        game_form.addRow("Plantilla sugerida", self.preset_combo)
 
-        # Campo obligatorio de extensiones manuales
         self.extensions_edit = QLineEdit()
         self.extensions_edit.setPlaceholderText("Ej: .sfc;.smc;.zip (separadas por ;)")
-        form.addRow("Extensiones admitidas *", self.extensions_edit)
+        game_form.addRow("Extensiones admitidas *", self.extensions_edit)
 
         ext_hint = QLabel(
             "<b>Obligatorio:</b> Escribí las extensiones permitidas separadas <b>exclusivamente por punto y coma (;)</b>.<br>"
@@ -65,9 +87,8 @@ class ListDialog(QDialog):
         )
         ext_hint.setStyleSheet("color: #aab1c0; font-size: 9pt;")
         ext_hint.setWordWrap(True)
-        form.addRow("", ext_hint)
+        game_form.addRow("", ext_hint)
 
-        # Campo para seleccionar carpeta donde están los juegos (ROMs)
         self.folder_edit = QLineEdit()
         self.folder_edit.setPlaceholderText("Seleccionar carpeta donde están los juegos...")
         browse_folder_btn = QPushButton("Examinar…")
@@ -77,36 +98,82 @@ class ListDialog(QDialog):
         folder_row.addWidget(browse_folder_btn)
         folder_holder = QWidget()
         folder_holder.setLayout(folder_row)
-        form.addRow("Carpeta de juegos", folder_holder)
+        game_form.addRow("Carpeta de juegos", folder_holder)
 
         self.auto_scan_checkbox = QCheckBox("Escanear e importar juegos de esta carpeta automáticamente")
         self.auto_scan_checkbox.setChecked(True if not existing else False)
-        form.addRow("", self.auto_scan_checkbox)
+        game_form.addRow("", self.auto_scan_checkbox)
 
         self.emulator_combo = QComboBox()
         self.emulator_combo.addItem("Sin emulador predeterminado", None)
         for e in emulators:
             self.emulator_combo.addItem(e["name"], e["id"])
-        form.addRow("Emulador predeterminado", self.emulator_combo)
+        game_form.addRow("Emulador predeterminado", self.emulator_combo)
 
-        from retroshelf.ui.layouts import get_available_layouts
-        self.layout_combo = QComboBox()
-        self.layout_combo.addItems(get_available_layouts())
-        form.addRow("Diseño visual predeterminado", self.layout_combo)
+        layout.addWidget(self.game_settings_group)
 
-        layout.addLayout(form)
+        # 3. Grupo para Menú de Sistemas (Selección y orden de listas vinculadas)
+        self.menu_settings_group = QGroupBox("Sistemas a incluir en este Menú")
+        menu_layout = QVBoxLayout(self.menu_settings_group)
+        menu_layout.setSpacing(8)
 
-        # Sección de Medios y Arte (Box Art, Wheel Logos, Video Snaps)
-        media_group = QGroupBox("Carpetas de Medios (Box Art, Wheel Logos y Video Snaps)")
+        menu_hint = QLabel("Marcá las listas que formarán parte de este menú y utilizá las flechas para definir el orden:")
+        menu_hint.setStyleSheet("color: #aab1c0; font-size: 9pt;")
+        menu_hint.setWordWrap(True)
+        menu_layout.addWidget(menu_hint)
+
+        list_and_controls = QHBoxLayout()
+        self.sublists_list = QListWidget()
+        self.sublists_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.sublists_list.setStyleSheet(
+            "QListWidget { background-color: #171a23; border: 1px solid #2a3143; border-radius: 6px; padding: 4px; }"
+            "QListWidget::item { padding: 4px; border-radius: 4px; }"
+            "QListWidget::item:hover { background-color: #23293a; }"
+            "QListWidget::item:selected { background-color: #5d48d9; color: white; }"
+        )
+        list_and_controls.addWidget(self.sublists_list, 1)
+
+        # Botones de orden y selección
+        btn_vbox = QVBoxLayout()
+        btn_vbox.setSpacing(6)
+
+        up_btn = QPushButton("▲ Subir")
+        up_btn.clicked.connect(self._move_item_up)
+        btn_vbox.addWidget(up_btn)
+
+        down_btn = QPushButton("▼ Bajar")
+        down_btn.clicked.connect(self._move_item_down)
+        btn_vbox.addWidget(down_btn)
+
+        btn_vbox.addSpacing(10)
+
+        check_all_btn = QPushButton("Marcar todas")
+        check_all_btn.clicked.connect(lambda: self._check_all_lists(True))
+        btn_vbox.addWidget(check_all_btn)
+
+        uncheck_all_btn = QPushButton("Desmarcar")
+        uncheck_all_btn.clicked.connect(lambda: self._check_all_lists(False))
+        btn_vbox.addWidget(uncheck_all_btn)
+
+        btn_vbox.addStretch()
+        list_and_controls.addLayout(btn_vbox)
+        menu_layout.addLayout(list_and_controls)
+
+        layout.addWidget(self.menu_settings_group)
+
+        # 4. Sección de Medios y Arte (Box Art, Wheel Logos, Video Snaps)
+        media_group = QGroupBox("Carpetas de Medios y Arte (Opcional)")
         media_layout = QFormLayout(media_group)
         media_layout.setSpacing(8)
 
-        auto_det_row = QHBoxLayout()
+        self.auto_det_row_widget = QWidget()
+        auto_det_row = QHBoxLayout(self.auto_det_row_widget)
+        auto_det_row.setContentsMargins(0, 0, 0, 0)
         auto_det_btn = QPushButton("🔍 Auto-detectar medios desde la carpeta de juegos")
         auto_det_btn.clicked.connect(self.auto_detect_media)
         auto_det_row.addWidget(auto_det_btn)
         auto_det_row.addStretch()
-        media_layout.addRow("", auto_det_row)
+        media_layout.addRow("", self.auto_det_row_widget)
 
         # 1. Box Art
         self.boxart_edit = QLineEdit()
@@ -154,14 +221,18 @@ class ListDialog(QDialog):
         cart_row.addWidget(browse_cart_btn)
         cart_holder = QWidget()
         cart_holder.setLayout(cart_row)
-        media_layout.addRow("Cartuchos (Opcional):", cart_holder)
+        media_layout.addRow("Cartuchos:", cart_holder)
 
         layout.addWidget(media_group)
 
+        # 5. Botones de acción
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        # Poblar listas vinculadas
+        self._populate_sublists()
 
         # Cargar valores si es edición
         if existing:
@@ -174,6 +245,11 @@ class ListDialog(QDialog):
                 self.emulator_combo.setCurrentIndex(idx)
             self.layout_combo.setCurrentText(existing["layout"] or "Wheel")
 
+            list_type = existing.get("list_type", "games")
+            idx_t = self.type_combo.findData(list_type)
+            if idx_t >= 0:
+                self.type_combo.setCurrentIndex(idx_t)
+
             if "boxart_path" in existing.keys() and existing["boxart_path"]:
                 self.boxart_edit.setText(existing["boxart_path"])
             if "wheel_path" in existing.keys() and existing["wheel_path"]:
@@ -182,6 +258,70 @@ class ListDialog(QDialog):
                 self.video_edit.setText(existing["video_path"])
             if "cartart_path" in existing.keys() and existing["cartart_path"]:
                 self.cartart_edit.setText(existing["cartart_path"])
+        else:
+            self.type_combo.setCurrentIndex(0)
+
+        self._on_type_changed()
+
+    def _populate_sublists(self):
+        self.sublists_list.clear()
+        excluded_id = self.existing["id"] if self.existing else None
+
+        initial_ids = [m["id"] for m in self.initial_menu_items]
+        # Mapa de todas las listas disponibles
+        lists_map = {l["id"]: dict(l) for l in self.all_lists if l["id"] != excluded_id}
+
+        # 1. Agregar primero las ya vinculadas en su orden guardado
+        for m_id in initial_ids:
+            if m_id in lists_map:
+                l_info = lists_map.pop(m_id)
+                self._add_sublist_item(l_info, checked=True)
+
+        # 2. Agregar las restantes
+        for l_info in lists_map.values():
+            checked = (self.existing is None)
+            self._add_sublist_item(l_info, checked=checked)
+
+    def _add_sublist_item(self, list_info: dict, checked: bool):
+        plat = list_info.get("platform") or "Sin definir"
+        is_menu = (list_info.get("list_type") == "menu")
+        prefix = "🧭 " if is_menu else "🎮 "
+        item = QListWidgetItem(f"{prefix}{list_info['name']}   [{plat}]")
+        item.setData(Qt.UserRole, list_info["id"])
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.sublists_list.addItem(item)
+
+    def _move_item_up(self):
+        row = self.sublists_list.currentRow()
+        if row > 0:
+            item = self.sublists_list.takeItem(row)
+            self.sublists_list.insertItem(row - 1, item)
+            self.sublists_list.setCurrentRow(row - 1)
+
+    def _move_item_down(self):
+        row = self.sublists_list.currentRow()
+        if row >= 0 and row < self.sublists_list.count() - 1:
+            item = self.sublists_list.takeItem(row)
+            self.sublists_list.insertItem(row + 1, item)
+            self.sublists_list.setCurrentRow(row + 1)
+
+    def _check_all_lists(self, checked: bool):
+        state = Qt.Checked if checked else Qt.Unchecked
+        for i in range(self.sublists_list.count()):
+            self.sublists_list.item(i).setCheckState(state)
+
+    def _on_type_changed(self):
+        is_menu = (self.type_combo.currentData() == "menu")
+        self.game_settings_group.setVisible(not is_menu)
+        self.menu_settings_group.setVisible(is_menu)
+        self.auto_det_row_widget.setVisible(not is_menu)
+        if is_menu:
+            if not self.platform_edit.text().strip():
+                self.platform_edit.setText("Menú Principal")
+            if not self.name_edit.text().strip():
+                self.name_edit.setText("Sistemas")
+        self.adjustSize()
 
     def _pick_media_folder(self, target_edit, dialog_title):
         current = target_edit.text().strip() or self.folder_edit.text().strip()
@@ -236,7 +376,6 @@ class ListDialog(QDialog):
                 if det.get("cartart_path"):
                     self.cartart_edit.setText(det["cartart_path"])
 
-
     def _on_preset_selected(self, index):
         title = self.preset_combo.currentText()
         if title in PRESET_EXTENSIONS and title != "Personalizado...":
@@ -250,6 +389,22 @@ class ListDialog(QDialog):
         if not name:
             QMessageBox.warning(self, "Nombre requerido", "Por favor ingresá un nombre para la lista.")
             self.name_edit.setFocus()
+            return
+
+        is_menu = (self.type_combo.currentData() == "menu")
+        if is_menu:
+            checked_count = sum(1 for i in range(self.sublists_list.count()) if self.sublists_list.item(i).checkState() == Qt.Checked)
+            if checked_count == 0:
+                answer = QMessageBox.question(
+                    self,
+                    "Menú sin sistemas",
+                    "No seleccionaste ninguna lista para incluir en este menú.\n¿Deseas crearlo de todas formas y vincular sistemas luego?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if answer != QMessageBox.Yes:
+                    return
+            self.accept()
             return
 
         raw_exts = self.extensions_edit.text().strip()
@@ -292,19 +447,29 @@ class ListDialog(QDialog):
         self.accept()
 
     def values(self):
-        """Retorna tupla con todos los valores configurados de la lista, incluyendo medios."""
+        """Retorna tupla con todos los valores configurados de la lista o menú."""
+        list_type = self.type_combo.currentData() if hasattr(self, "type_combo") else "games"
+        selected_ids = []
+        if list_type == "menu" and hasattr(self, "sublists_list"):
+            for i in range(self.sublists_list.count()):
+                item = self.sublists_list.item(i)
+                if item.checkState() == Qt.Checked:
+                    selected_ids.append(item.data(Qt.UserRole))
+
         return (
             self.name_edit.text().strip(),
             self.platform_edit.text().strip(),
-            self.emulator_combo.currentData(),
+            self.emulator_combo.currentData() if list_type == "games" else None,
             self.layout_combo.currentText(),
-            self.normalized_exts,
-            self.folder_edit.text().strip(),
-            self.auto_scan_checkbox.isChecked(),
+            self.normalized_exts if list_type == "games" else "",
+            self.folder_edit.text().strip() if list_type == "games" else "",
+            self.auto_scan_checkbox.isChecked() if list_type == "games" else False,
             self.boxart_edit.text().strip(),
             self.wheel_edit.text().strip(),
             self.video_edit.text().strip(),
             self.cartart_edit.text().strip(),
+            list_type,
+            selected_ids,
         )
 
 

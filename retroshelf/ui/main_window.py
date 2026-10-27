@@ -385,15 +385,27 @@ class MainWindow(QMainWindow):
         )
 
         for row in rows:
-            display_text = f"{row['name']} ({row['game_count']})"
-            item = QListWidgetItem(display_text)
-            item.setData(Qt.UserRole, row["id"])
-            folder_tip = f"\nCarpeta: {row['roms_path']}" if ("roms_path" in row.keys() and row["roms_path"]) else ""
-            item.setToolTip(
-                f"Plataforma: {row['platform'] or 'Sin definir'}\n"
-                f"Extensiones: {row['allowed_extensions'] or 'Sin extensiones'}\n"
-                f"Diseño: {row['layout']}{folder_tip}"
-            )
+            is_menu = (row.get("list_type") == "menu")
+            if is_menu:
+                menu_items = self.db.get_menu_items(row["id"])
+                display_text = f"🧭 {row['name']} ({len(menu_items)})"
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.UserRole, row["id"])
+                item.setToolTip(
+                    f"🧭 Menú de Sistemas\n"
+                    f"Sistemas incluidos: {len(menu_items)}\n"
+                    f"Diseño: {row['layout']}"
+                )
+            else:
+                display_text = f"{row['name']} ({row['game_count']})"
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.UserRole, row["id"])
+                folder_tip = f"\nCarpeta: {row['roms_path']}" if ("roms_path" in row.keys() and row["roms_path"]) else ""
+                item.setToolTip(
+                    f"Plataforma: {row['platform'] or 'Sin definir'}\n"
+                    f"Extensiones: {row['allowed_extensions'] or 'Sin extensiones'}\n"
+                    f"Diseño: {row['layout']}{folder_tip}"
+                )
             self.list_widget.addItem(item)
             if select_id and row["id"] == select_id:
                 self.list_widget.setCurrentItem(item)
@@ -420,11 +432,19 @@ class MainWindow(QMainWindow):
         if not row:
             return
 
-        self.list_title.setText(row["name"])
-        exts_text = row["allowed_extensions"] or "Sin configurar"
-        plat_text = f" · Plataforma: {row['platform']}" if row["platform"] else ""
-        folder_text = f" · Carpeta: {row['roms_path']}" if ("roms_path" in row.keys() and row["roms_path"]) else ""
-        self.list_meta_label.setText(f"Extensiones admitidas: <b>{exts_text}</b>{plat_text}{folder_text}")
+        is_menu = (row.get("list_type") == "menu")
+        if is_menu:
+            menu_items = self.db.get_menu_items(self.current_list_id)
+            self.list_title.setText(f"🧭 {row['name']}")
+            self.list_meta_label.setText(
+                f"🧭 <b>Menú de Sistemas</b> · {len(menu_items)} sistema(s) vinculado(s) · Diseño: <b>{row['layout']}</b>"
+            )
+        else:
+            self.list_title.setText(row["name"])
+            exts_text = row["allowed_extensions"] or "Sin configurar"
+            plat_text = f" · Plataforma: {row['platform']}" if row["platform"] else ""
+            folder_text = f" · Carpeta: {row['roms_path']}" if ("roms_path" in row.keys() and row["roms_path"]) else ""
+            self.list_meta_label.setText(f"Extensiones admitidas: <b>{exts_text}</b>{plat_text}{folder_text}")
 
         # Sincronizar combo de layout
         self.layout_combo.blockSignals(True)
@@ -437,20 +457,24 @@ class MainWindow(QMainWindow):
 
     def create_list(self):
         emulators = self.db.all("SELECT * FROM emulators ORDER BY name COLLATE NOCASE")
-        dialog = ListDialog(emulators, self)
+        all_lists = self.db.all("SELECT * FROM game_lists ORDER BY name COLLATE NOCASE")
+        dialog = ListDialog(emulators, self, all_lists=all_lists)
         if dialog.exec():
-            name, platform, emu_id, layout, exts, folder, auto_scan, boxart_path, wheel_path, video_path, cartart_path = dialog.values()
+            name, platform, emu_id, layout, exts, folder, auto_scan, boxart_path, wheel_path, video_path, cartart_path, list_type, selected_list_ids = dialog.values()
             try:
                 list_id = self.db.execute(
                     """INSERT INTO game_lists(
                         name, platform, default_emulator_id, layout, allowed_extensions, roms_path,
-                        boxart_path, wheel_path, video_path, cartart_path)
-                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                    (name, platform, emu_id, layout, exts, folder, boxart_path, wheel_path, video_path, cartart_path)
+                        boxart_path, wheel_path, video_path, cartart_path, list_type)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (name, platform, emu_id, layout, exts, folder, boxart_path, wheel_path, video_path, cartart_path, list_type)
                 )
+                if list_type == "menu":
+                    self.db.set_menu_items(list_id, selected_list_ids)
+
                 self.refresh_lists(select_id=list_id)
 
-                if folder and auto_scan and Path(folder).is_dir():
+                if list_type == "games" and folder and auto_scan and Path(folder).is_dir():
                     try:
                         self.statusBar().showMessage(f"Escaneando carpeta de '{name}'…")
                         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -465,7 +489,8 @@ class MainWindow(QMainWindow):
                         QApplication.restoreOverrideCursor()
                         QMessageBox.warning(self, "Aviso de escaneo", f"Se creó la lista pero ocurrió un error al escanear la carpeta:\n{err}")
                 else:
-                    self.statusBar().showMessage(f"Lista '{name}' creada con éxito.", 4000)
+                    msg = f"Menú '{name}' creado con éxito con {len(selected_list_ids)} sistemas." if list_type == "menu" else f"Lista '{name}' creada con éxito."
+                    self.statusBar().showMessage(msg, 4000)
             except Exception as e:
                 QMessageBox.critical(self, "No se pudo crear la lista", f"Error al guardar:\n{e}")
 
@@ -479,20 +504,25 @@ class MainWindow(QMainWindow):
             return
 
         emulators = self.db.all("SELECT * FROM emulators ORDER BY name COLLATE NOCASE")
-        dialog = ListDialog(emulators, self, existing=row)
+        all_lists = self.db.all("SELECT * FROM game_lists ORDER BY name COLLATE NOCASE")
+        initial_menu_items = self.db.get_menu_items(self.current_list_id)
+        dialog = ListDialog(emulators, self, existing=row, all_lists=all_lists, initial_menu_items=initial_menu_items)
         if dialog.exec():
-            name, platform, emu_id, layout, exts, folder, auto_scan, boxart_path, wheel_path, video_path, cartart_path = dialog.values()
+            name, platform, emu_id, layout, exts, folder, auto_scan, boxart_path, wheel_path, video_path, cartart_path, list_type, selected_list_ids = dialog.values()
             try:
                 self.db.execute(
                     """UPDATE game_lists
                        SET name=?, platform=?, default_emulator_id=?, layout=?, allowed_extensions=?, roms_path=?,
-                           boxart_path=?, wheel_path=?, video_path=?, cartart_path=?
+                           boxart_path=?, wheel_path=?, video_path=?, cartart_path=?, list_type=?
                        WHERE id=?""",
-                    (name, platform, emu_id, layout, exts, folder, boxart_path, wheel_path, video_path, cartart_path, self.current_list_id)
+                    (name, platform, emu_id, layout, exts, folder, boxart_path, wheel_path, video_path, cartart_path, list_type, self.current_list_id)
                 )
+                if list_type == "menu":
+                    self.db.set_menu_items(self.current_list_id, selected_list_ids)
+
                 self.refresh_lists(select_id=self.current_list_id)
 
-                if folder and auto_scan and Path(folder).is_dir():
+                if list_type == "games" and folder and auto_scan and Path(folder).is_dir():
                     try:
                         self.statusBar().showMessage(f"Escaneando carpeta de '{name}'…")
                         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -612,7 +642,39 @@ class MainWindow(QMainWindow):
             self.on_game_unselected()
             return
 
-        term = self.search.text().strip()
+        row_list = self.db.one("SELECT * FROM game_lists WHERE id=?", (self.current_list_id,))
+        term = self.search.text().strip().lower()
+
+        if row_list and row_list.get("list_type") == "menu":
+            targets = self.db.get_menu_items(self.current_list_id)
+            items = []
+            for t in targets:
+                t_dict = dict(t)
+                title = t_dict["name"]
+                platform = t_dict["platform"] or title
+                if term and (term not in title.lower() and term not in platform.lower()):
+                    continue
+                cnt_row = self.db.one("SELECT COUNT(*) as c FROM games WHERE list_id=?", (t_dict["id"],))
+                g_count = cnt_row["c"] if cnt_row else 0
+                items.append({
+                    "id": t_dict["id"],
+                    "target_list_id": t_dict["id"],
+                    "is_menu_target": True,
+                    "title": title,
+                    "rom_path": "",
+                    "list_id": self.current_list_id,
+                    "platform": platform,
+                    "boxart_path": t_dict.get("boxart_path") or "",
+                    "wheel_path": t_dict.get("wheel_path") or "",
+                    "video_path": t_dict.get("video_path") or "",
+                    "cartart_path": t_dict.get("cartart_path") or "",
+                    "effective_name": f"{g_count} juegos",
+                    "source": "menu",
+                })
+            self.games_cache = items
+            self._render_games()
+            return
+
         rows = self.db.all(
             """SELECT g.*, l.default_emulator_id, l.platform,
                l.boxart_path, l.wheel_path, l.video_path, l.cartart_path, l.media_path,
@@ -638,7 +700,11 @@ class MainWindow(QMainWindow):
 
     def _render_games(self):
         count = len(self.games_cache)
-        self.game_count_label.setText(f"{count} juego{'s' if count != 1 else ''}")
+        current_list = self.db.one("SELECT list_type FROM game_lists WHERE id=?", (self.current_list_id,)) if self.current_list_id else None
+        if current_list and current_list.get("list_type") == "menu":
+            self.game_count_label.setText(f"{count} sistema{'s' if count != 1 else ''}")
+        else:
+            self.game_count_label.setText(f"{count} juego{'s' if count != 1 else ''}")
 
         matching_ids = {g["id"] for g in self.games_cache} if self.games_cache else set()
         if self.current_game_id and self.current_game_id not in matching_ids:
@@ -660,10 +726,37 @@ class MainWindow(QMainWindow):
 
     def _on_game_activated(self, game_id: int):
         self._select_game_by_id(game_id)
+        selected_item = next((g for g in self.games_cache if g["id"] == game_id), None)
+        if selected_item and selected_item.get("is_menu_target"):
+            target_id = selected_item["target_list_id"]
+            for i in range(self.list_widget.count()):
+                item = self.list_widget.item(i)
+                if item.data(Qt.UserRole) == target_id:
+                    self.list_widget.setCurrentItem(item)
+                    break
+            return
         self.launch_selected()
 
     def _on_game_context_menu(self, game_id: int, global_pos: QPoint):
         self._select_game_by_id(game_id)
+        selected_item = next((g for g in self.games_cache if g["id"] == game_id), None)
+        if selected_item and selected_item.get("is_menu_target"):
+            menu = QMenu(self)
+            open_act = menu.addAction("📂 Abrir lista de este sistema")
+            edit_act = menu.addAction("✎ Editar sistema…")
+            action = menu.exec(global_pos)
+            if action == open_act:
+                self._on_game_activated(game_id)
+            elif action == edit_act:
+                target_id = selected_item["target_list_id"]
+                for i in range(self.list_widget.count()):
+                    item = self.list_widget.item(i)
+                    if item.data(Qt.UserRole) == target_id:
+                        self.list_widget.setCurrentItem(item)
+                        self.edit_current_list()
+                        break
+            return
+
         menu = QMenu(self)
         play_act = menu.addAction("▶ Ejecutar juego")
         edit_act = menu.addAction("✎ Editar juego…")
@@ -687,6 +780,16 @@ class MainWindow(QMainWindow):
         if current_layout and current_layout.get_selected_game_id() != game_id:
             current_layout.select_game_by_id(game_id)
 
+        selected_item = next((g for g in self.games_cache if g["id"] == game_id), None)
+        if selected_item and selected_item.get("is_menu_target"):
+            self.game_name.setText(f"🧭 {selected_item['title']}")
+            self.game_path.setText(f"Plataforma: {selected_item['platform']}")
+            self.game_size.setText(f"Sistema vinculado ({selected_item.get('effective_name', '')})")
+            self.override_combo.blockSignals(True)
+            self.override_combo.setCurrentIndex(0)
+            self.override_combo.blockSignals(False)
+            return
+
         game = self.db.one("SELECT * FROM games WHERE id=?", (game_id,))
         if not game:
             self.on_game_unselected()
@@ -694,7 +797,6 @@ class MainWindow(QMainWindow):
 
         self.game_name.setText(game["title"])
         self.game_path.setText(game["rom_path"])
-
 
         rom_p = Path(game["rom_path"])
         if rom_p.exists():

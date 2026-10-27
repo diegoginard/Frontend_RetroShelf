@@ -171,6 +171,64 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
         if cart_folder and os.path.isdir(cart_folder):
             media["cartart"] = find_media_file(cart_folder, stem, IMAGE_EXTS)
 
+    # Resolución de medios para Menú de Sistemas (cuando el item representa una lista/consola)
+    if (not stem or row_dict.get("is_menu_target")) and row_dict:
+        sys_name = row_dict.get("title") or ""
+        plat_name = row_dict.get("platform") or sys_name
+        candidates = [c for c in (sys_name, plat_name) if c]
+
+        # 1. Wheel Logos desde carpeta wheel_path
+        wheel_folder = row_dict.get("wheel_path")
+        if wheel_folder and os.path.isdir(wheel_folder) and not media["wheel"]:
+            for cand in candidates:
+                found = find_media_file(wheel_folder, cand, IMAGE_EXTS)
+                if found:
+                    media["wheel"] = found
+                    break
+
+        # 2. Box Art desde carpeta boxart_path
+        box_folder = row_dict.get("boxart_path")
+        if box_folder and os.path.isdir(box_folder) and not media["boxart"]:
+            for cand in candidates:
+                found = find_media_file(box_folder, cand, IMAGE_EXTS)
+                if found:
+                    media["boxart"] = found
+                    break
+
+        # 3. Video Snaps desde carpeta video_path
+        video_folder = row_dict.get("video_path")
+        if video_folder and os.path.isdir(video_folder) and not media["video"]:
+            for cand in candidates:
+                found = find_media_file(video_folder, cand, VIDEO_EXTS)
+                if found:
+                    media["video"] = found
+                    break
+
+        # 4. Fallback automático a los recursos de temas (Layouts/<Sistema>/logo.png, etc.)
+        try:
+            from retroshelf.services.themes import get_all_theme_layouts
+            from retroshelf.ui.layouts import resolve_theme_name
+            themes = get_all_theme_layouts()
+            matched = resolve_theme_name(plat_name, themes) or resolve_theme_name(sys_name, themes)
+            if matched and matched in themes:
+                th_folder = Path(themes[matched]["folder"])
+                if not media["wheel"]:
+                    logo_file = th_folder / "logo.png"
+                    if logo_file.is_file():
+                        media["wheel"] = str(logo_file)
+                if not media["boxart"]:
+                    for art_name in ("console.png", "avatar.png", "boxart.png"):
+                        art_file = th_folder / art_name
+                        if art_file.is_file():
+                            media["boxart"] = str(art_file)
+                            break
+                if not media["cartart"]:
+                    cart_file = th_folder / "cartart.png"
+                    if cart_file.is_file():
+                        media["cartart"] = str(cart_file)
+        except Exception:
+            pass
+
     # Fallbacks directos si los campos contienen rutas de archivo directas
     if row_dict:
         if not media["boxart"]:

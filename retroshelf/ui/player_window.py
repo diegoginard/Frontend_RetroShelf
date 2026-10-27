@@ -77,6 +77,7 @@ class PlayerWindow(QMainWindow):
         self.current_game_id = None
         self.games_cache = []
         self.platform_buttons = []
+        self.navigation_history = []
 
         self.setWindowTitle("RetroShelf — Frontend")
         self.resize(1280, 800)
@@ -119,7 +120,7 @@ class PlayerWindow(QMainWindow):
 
         # Buscador rápido
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Buscar juego… (Ctrl+F)")
+        self.search_box.setPlaceholderText("Buscar… (Ctrl+F)")
         self.search_box.setFixedWidth(200)
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
@@ -161,12 +162,12 @@ class PlayerWindow(QMainWindow):
         b_layout = QHBoxLayout(self.bottom_bar)
         b_layout.setContentsMargins(4, 4, 4, 4)
 
-        self.status_label = QLabel("Seleccioná un juego para jugar")
+        self.status_label = QLabel("Seleccioná un elemento para comenzar")
         self.status_label.setStyleSheet("color: #8f9db3; font-size: 9pt;")
         b_layout.addWidget(self.status_label)
         b_layout.addStretch()
 
-        tip_label = QLabel("F11: Pantalla completa  |  Enter o Doble clic: Jugar  |  Esc: Salir")
+        tip_label = QLabel("F11: Pantalla completa  |  Enter: Seleccionar / Jugar  |  Esc / Retroceso: Volver")
         tip_label.setStyleSheet("color: #647087; font-size: 9pt;")
         b_layout.addWidget(tip_label)
 
@@ -179,10 +180,23 @@ class PlayerWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key_F11), self, self.toggle_fullscreen)
         # Ctrl+F para buscar
         QShortcut(QKeySequence("Ctrl+F"), self, self.search_box.setFocus)
-        # Escape para deseleccionar búsqueda o salir de pantalla completa
+        # Escape para retroceder o salir de pantalla completa
         QShortcut(QKeySequence(Qt.Key_Escape), self, self._on_escape)
+        # Backspace para retroceder en la navegación de menús
+        QShortcut(QKeySequence(Qt.Key_Backspace), self, self._on_backspace)
+
+    def _on_backspace(self):
+        if self.search_box.hasFocus():
+            return
+        if self.navigation_history:
+            prev_id = self.navigation_history.pop()
+            self.select_list(prev_id, push_history=False)
 
     def _on_escape(self):
+        if self.navigation_history:
+            prev_id = self.navigation_history.pop()
+            self.select_list(prev_id, push_history=False)
+            return
         if self.isFullScreen():
             self.showNormal()
             self.fullscreen_btn.setText("⛶ Pantalla completa")
@@ -310,18 +324,23 @@ class PlayerWindow(QMainWindow):
 
         for idx, row in enumerate(rows):
             name = row["name"]
-            count = row["game_count"]
-            btn = QPushButton(f"{name} ({count})")
+            is_menu = (row.get("list_type") == "menu")
+            if is_menu:
+                sub_items = self.db.get_menu_items(row["id"])
+                btn = QPushButton(f"🧭 {name} ({len(sub_items)})")
+            else:
+                count = row["game_count"]
+                btn = QPushButton(f"{name} ({count})")
             btn.setProperty("class", "platform-btn")
             btn.setCheckable(True)
             list_id = row["id"]
-            btn.clicked.connect(lambda checked=False, lid=list_id: self.select_list(lid))
+            btn.clicked.connect(lambda checked=False, lid=list_id: self.select_list(lid, push_history=True))
             self.platforms_layout.insertWidget(idx, btn)
             self.platform_buttons.append((list_id, btn))
 
         # Seleccionar la primera lista por defecto
         if self.platform_buttons:
-            self.select_list(self.platform_buttons[0][0])
+            self.select_list(self.platform_buttons[0][0], push_history=False)
 
     def _get_or_create_layout(self, layout_name: str):
         """Obtiene una instancia del layout o la crea dinámicamente si es un tema de sistema."""
@@ -337,7 +356,10 @@ class PlayerWindow(QMainWindow):
         self.layout_stack.addWidget(inst)
         return inst
 
-    def select_list(self, list_id: int):
+    def select_list(self, list_id: int, push_history: bool = True):
+        if push_history and self.current_list_id and self.current_list_id != list_id:
+            self.navigation_history.append(self.current_list_id)
+
         self.current_list_id = list_id
 
         # Actualizar estado 'checked' de los botones
@@ -387,7 +409,50 @@ class PlayerWindow(QMainWindow):
             self.games_cache = []
             return
 
-        term = self.search_box.text().strip()
+        row = self.db.one("SELECT * FROM game_lists WHERE id=?", (self.current_list_id,))
+        if not row:
+            return
+
+        term = self.search_box.text().strip().lower()
+
+        if row.get("list_type") == "menu":
+            targets = self.db.get_menu_items(self.current_list_id)
+            items = []
+            for t in targets:
+                t_dict = dict(t)
+                title = t_dict["name"]
+                platform = t_dict["platform"] or title
+                if term and (term not in title.lower() and term not in platform.lower()):
+                    continue
+                cnt_row = self.db.one("SELECT COUNT(*) as c FROM games WHERE list_id=?", (t_dict["id"],))
+                g_count = cnt_row["c"] if cnt_row else 0
+                items.append({
+                    "id": t_dict["id"],
+                    "target_list_id": t_dict["id"],
+                    "is_menu_target": True,
+                    "title": title,
+                    "rom_path": "",
+                    "list_id": self.current_list_id,
+                    "platform": platform,
+                    "boxart_path": t_dict.get("boxart_path") or "",
+                    "wheel_path": t_dict.get("wheel_path") or "",
+                    "video_path": t_dict.get("video_path") or "",
+                    "cartart_path": t_dict.get("cartart_path") or "",
+                    "effective_name": f"{g_count} juegos",
+                    "source": "menu",
+                })
+            self.games_cache = items
+            current_layout = self.layout_stack.currentWidget()
+            if current_layout:
+                current_layout.set_games(self.games_cache)
+                if self.games_cache:
+                    first_id = self.games_cache[0]["id"]
+                    current_layout.select_game_by_id(first_id)
+                    self._on_game_selected(first_id)
+                else:
+                    self.status_label.setText("No hay sistemas en este menú. Agregalos desde el Configurador.")
+            return
+
         rows = self.db.all(
             """SELECT g.*, l.default_emulator_id, l.platform,
                l.boxart_path, l.wheel_path, l.video_path, l.cartart_path, l.media_path,
@@ -425,21 +490,32 @@ class PlayerWindow(QMainWindow):
         self.current_game_id = game_id
         game = next((g for g in self.games_cache if g["id"] == game_id), None)
         if game:
-            emu = game.get("effective_name", "Sin emulador")
-            self.status_label.setText(f"🎮 <b>{game['title']}</b>   |   Emulador: {emu}")
+            if game.get("is_menu_target"):
+                self.status_label.setText(
+                    f"🧭 <b>{game['title']}</b>   |   {game.get('effective_name', '')}   |   Enter: Entrar al sistema  |  Esc / Retroceso: Volver"
+                )
+            else:
+                emu = game.get("effective_name", "Sin emulador")
+                self.status_label.setText(f"🎮 <b>{game['title']}</b>   |   Emulador: {emu}")
 
     def _on_game_activated(self, game_id: int):
         self.current_game_id = game_id
-        game = self.db.one("SELECT * FROM games WHERE id=?", (game_id,))
-        if not game:
+        game = next((g for g in self.games_cache if g["id"] == game_id), None)
+        if game and game.get("is_menu_target"):
+            target_id = game["target_list_id"]
+            self.select_list(target_id, push_history=True)
+            return
+
+        db_game = self.db.one("SELECT * FROM games WHERE id=?", (game_id,))
+        if not db_game:
             return
 
         try:
-            self.status_label.setText(f"Iniciando <b>{game['title']}</b>...")
+            self.status_label.setText(f"Iniciando <b>{db_game['title']}</b>...")
             QApplication.processEvents()
             active_layout = self.layout_stack.currentWidget()
-            emu_name, source = launch_game(self.db, game, layout=active_layout, parent_window=self)
-            self.status_label.setText(f"Ejecutando <b>{game['title']}</b> con {emu_name}")
+            emu_name, source = launch_game(self.db, db_game, layout=active_layout, parent_window=self)
+            self.status_label.setText(f"Ejecutando <b>{db_game['title']}</b> con {emu_name}")
         except Exception as e:
             QMessageBox.critical(self, "No se pudo iniciar el juego", str(e))
             self.status_label.setText("Error al ejecutar el juego.")
