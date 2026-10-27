@@ -46,11 +46,12 @@ def get_all_theme_layouts(force_reload: bool = False) -> dict[str, dict]:
             continue
         if entry.name.startswith((".", "_")):
             continue
-        # Solo registrar carpetas que contengan theme_layout.py
-        if not (Path(entry.path) / "theme_layout.py").is_file():
+        folder = Path(entry.path)
+        # Para ser reconocido como layout, la carpeta DEBE contener ambos archivos:
+        # theme_layout.py (lógica y vista) y layout.json (requerimientos de medios y configuración)
+        if not (folder / "theme_layout.py").is_file() or not (folder / "layout.json").is_file():
             continue
 
-        folder = Path(entry.path)
         themes[entry.name] = {
             "name": entry.name,
             "folder": str(folder),
@@ -157,13 +158,14 @@ GENERIC_MEDIA_SPECS: dict[str, list[dict]] = {
 def get_layout_media_spec(layout_name: str) -> list[dict]:
     """
     Obtiene la especificación de medios requeridos por un layout:
-    1. Si es un tema de sistema, busca 'layout.json' en su carpeta.
+    1. Si es un tema de sistema, lee 'layout.json' en su carpeta.
     2. Si es un layout genérico estándar, retorna su especificación por defecto.
+    3. Si no existe especificación, retorna lista vacía.
     """
     import json
 
     if not layout_name:
-        return GENERIC_MEDIA_SPECS.get("Wheel", [])
+        return []
 
     info = get_theme_info(layout_name)
     if info and info.get("folder"):
@@ -183,36 +185,6 @@ def get_layout_media_spec(layout_name: str) -> list[dict]:
         if layout_name.lower() == name.lower():
             return spec
 
-    # Fallback si no se encontró layout.json ni es genérico conocido
-    return [
-        {
-            "key": "video",
-            "label": "Video Snaps",
-            "folder": "videos",
-            "extensions": [".mp4", ".mkv", ".avi", ".webm"],
-            "required": True
-        },
-        {
-            "key": "wheel",
-            "label": "Wheel Logos",
-            "folder": "wheel",
-            "extensions": [".png", ".webp"],
-            "required": True
-        },
-        {
-            "key": "cartart",
-            "label": "Cartuchos",
-            "folder": "cartart",
-            "extensions": [".png", ".webp"],
-            "required": True
-        },
-        {
-            "key": "boxart",
-            "label": "Box Art / Carátulas",
-            "folder": "boxart",
-            "extensions": [".png", ".jpg", ".jpeg", ".webp"],
-            "required": False
-        }
-    ]
+    return []
 
 
