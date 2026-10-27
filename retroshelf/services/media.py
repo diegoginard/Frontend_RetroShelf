@@ -369,35 +369,11 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
                 break
 
 
-    # Fallbacks directos si los campos contienen rutas de archivo directas
-    if row_dict:
-        if not media["boxart"]:
-            for k in ("cover_path", "boxart_path", "boxart"):
-                val = row_dict.get(k)
-                if val and os.path.isfile(val):
-                    media["boxart"] = val
-                    break
-
-        if not media["cartart"]:
-            for k in ("cartart_path", "cartart", "cart_path"):
-                val = row_dict.get(k)
-                if val and os.path.isfile(val):
-                    media["cartart"] = val
-                    break
-
-        if not media["video"]:
-            for k in ("video_path", "snap_path", "video", "snap"):
-                val = row_dict.get(k)
-                if val and os.path.isfile(val):
-                    media["video"] = val
-                    break
-
-        if not media["wheel"]:
-            for k in ("wheel_path", "logo_path", "wheel", "logo"):
-                val = row_dict.get(k)
-                if val and os.path.isfile(val):
-                    media["wheel"] = val
-                    break
+    # Carátula personalizada asignada manualmente a un juego individual (games.cover_path)
+    if row_dict and not media["boxart"] and not row_dict.get("is_menu_target"):
+        c_path = row_dict.get("cover_path")
+        if c_path and os.path.isfile(c_path):
+            media["boxart"] = c_path
 
     # Sincronizar clave snap con video
     media["snap"] = media["video"]
