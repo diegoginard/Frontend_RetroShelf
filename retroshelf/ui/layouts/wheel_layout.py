@@ -542,23 +542,22 @@ class WheelLayout(BaseLayout):
             self.context_menu_requested.emit(game_id, global_pos)
 
     def keyPressEvent(self, event):
-        key = event.key()
-        if matches_action(key, ACTION_SELECT, getattr(self, "db", None)):
+        if matches_action(event, ACTION_SELECT, getattr(self, "db", None)):
             if self.current_game_id:
                 self.game_activated.emit(self.current_game_id)
                 event.accept()
                 return
-        elif matches_action(key, ACTION_NAV_UP, getattr(self, "db", None)):
+        elif matches_action(event, ACTION_NAV_UP, getattr(self, "db", None)):
             row = max(0, self.wheel_list.currentRow() - 1)
             self.wheel_list.setCurrentRow(row)
             event.accept()
             return
-        elif matches_action(key, ACTION_NAV_DOWN, getattr(self, "db", None)):
+        elif matches_action(event, ACTION_NAV_DOWN, getattr(self, "db", None)):
             row = min(self.wheel_list.count() - 1, self.wheel_list.currentRow() + 1)
             self.wheel_list.setCurrentRow(row)
             event.accept()
             return
-        elif matches_action(key, ACTION_MUTE, getattr(self, "db", None)):
+        elif matches_action(event, ACTION_MUTE, getattr(self, "db", None)):
             self.set_media_muted(not getattr(self, "_media_muted", False))
             event.accept()
             return

@@ -284,8 +284,6 @@ class PlayerWindow(QMainWindow):
         else:
             self.fullscreen_btn.setText("⛶ Pantalla completa")
 
-
-
     def toggle_fullscreen(self):
         if self.isFullScreen():
             self.showNormal()

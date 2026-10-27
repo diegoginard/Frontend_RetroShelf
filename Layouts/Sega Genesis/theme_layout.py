@@ -865,9 +865,16 @@ class ThemeLayout(BaseLayout):
         ptr_cy = sy + int(sh * slot_center_y_ratio)
         ptr_y = ptr_cy - (ptr_h // 2)
 
-        # Micro-oscilación sutil en reposo
-        idle_oscillation = math.sin(self._pointer_anim_tick * 0.08) * 0.003
-        ptr_x = sx + int(sw * (self._pointer_current_x_ratio + idle_oscillation))
+        # Ancho visible del puntero (~56% del ancho de 326)
+        visible_w = int(ptr_w * 0.56)
+        # Casi pegado al borde derecho de la pantalla (margen mínimo de ~4px)
+        edge_margin = max(4, int(sw * 0.003))
+        base_x = sx + sw - edge_margin - visible_w
+
+        # Pulso elástico al cambiar de juego + micro oscilación en reposo
+        pulse_offset = int(sw * (self._pointer_rest_x_ratio - self._pointer_current_x_ratio))
+        idle_oscillation = int(sw * (math.sin(self._pointer_anim_tick * 0.08) * 0.002))
+        ptr_x = base_x - pulse_offset + idle_oscillation
 
         painter.save()
         painter.setOpacity(1.0)

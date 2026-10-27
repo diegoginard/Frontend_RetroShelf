@@ -75,8 +75,8 @@ class EmulatorManager(QObject):
         self.db = db
 
         # Leer configuración de la base de datos
-        exit_key_name = get_binding(db, ACTION_CLOSE_EMULATOR)
-        self.exit_vk = key_name_to_vk(exit_key_name)
+        self.exit_key_name = get_binding(db, ACTION_CLOSE_EMULATOR)
+        self.exit_vk = key_name_to_vk(self.exit_key_name)
 
         self.mute_on_run = (db.get_setting("emulator_mute_video", "true").lower() == "true") if db else True
         self.global_exit_enabled = (db.get_setting("emulator_global_exit", "true").lower() == "true") if db else True
@@ -113,8 +113,19 @@ class EmulatorManager(QObject):
                 # GetAsyncKeyState retorna < 0 (bit 15 en 1) si la tecla está presionada
                 state = ctypes.windll.user32.GetAsyncKeyState(self.exit_vk)
                 if state & 0x8000:
-                    self.terminate_active_emulator()
-                    return
+                    # Si el atajo requiere modificadores (Ctrl, Alt, Shift), comprobar que coincidan
+                    parts = [p.strip().lower() for p in (self.exit_key_name or "").split("+")]
+                    req_ctrl = "ctrl" in parts[:-1]
+                    req_alt = "alt" in parts[:-1]
+                    req_shift = "shift" in parts[:-1]
+
+                    ctrl_pressed = bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000)
+                    alt_pressed = bool(ctypes.windll.user32.GetAsyncKeyState(0x12) & 0x8000)
+                    shift_pressed = bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+
+                    if (req_ctrl == ctrl_pressed) and (req_alt == alt_pressed) and (req_shift == shift_pressed):
+                        self.terminate_active_emulator()
+                        return
             except Exception:
                 pass
 

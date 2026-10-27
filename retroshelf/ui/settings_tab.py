@@ -6,7 +6,7 @@ Permite configurar:
 3. Configuración de pantalla y video del Frontend (modo de pantalla, resolución, monitor y escala).
 """
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import QFont, QGuiApplication, QKeyEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 from retroshelf.services.controls import (
     ACTIONS_INFO, get_all_bindings, set_binding, reset_default_bindings,
-    qt_key_to_name
+    qt_key_to_name, qt_event_to_shortcut_name
 )
 
 SCREEN_MODES = [
@@ -45,16 +45,17 @@ GRAPHICS_ENGINES = [
 
 class KeyCaptureDialog(QDialog):
     """
-    Diálogo modal interactivo para capturar una tecla presionada por el usuario.
+    Diálogo modal interactivo para capturar una tecla o combinación presionada por el usuario.
     """
     def __init__(self, action_name: str, parent=None):
         super().__init__(parent)
         self.action_name = action_name
         self.captured_key_name: str | None = None
 
-        self.setWindowTitle("Asignar tecla")
-        self.setFixedSize(420, 220)
+        self.setWindowTitle("Asignar tecla o atajo")
+        self.setFixedSize(460, 240)
         self.setModal(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.setStyleSheet("""
             QDialog {
                 background-color: #1a1d27;
@@ -67,7 +68,7 @@ class KeyCaptureDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
 
-        lbl_title = QLabel(f"Asignando control para:")
+        lbl_title = QLabel("Asignando control para:")
         lbl_title.setStyleSheet("color: #9aa5b8; font-size: 10pt;")
         layout.addWidget(lbl_title)
 
@@ -91,25 +92,107 @@ class KeyCaptureDialog(QDialog):
         kb_layout.addWidget(self.status_label)
         layout.addWidget(self.key_box)
 
-        hint = QLabel("Presioná la tecla que querés asignar (ej: Escape, Espacio, W, Enter...)")
-        hint.setStyleSheet("color: #718096; font-size: 9pt;")
+        hint = QLabel("Presioná cualquier tecla o atajo (ej: Escape, Espacio, Enter, Flechas, Letras, Ctrl+Q, Alt+F4...)")
+        hint.setStyleSheet("color: #718096; font-size: 8.5pt;")
         hint.setAlignment(Qt.AlignCenter)
         layout.addWidget(hint)
 
         btn_cancel = QPushButton("Cancelar")
-        btn_cancel.clicked.connect(self.reject)
+        btn_cancel.setFocusPolicy(Qt.NoFocus)  # Evita que el botón intercepte Space o Enter
+        btn_cancel.clicked.connect(self._safe_reject)
         layout.addWidget(btn_cancel)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.setFocus()
+        self.activateWindow()
+        try:
+            self.grabKeyboard()
+        except Exception:
+            pass
+
+    def hideEvent(self, event):
+        try:
+            self.releaseKeyboard()
+        except Exception:
+            pass
+        super().hideEvent(event)
+
+    def _safe_reject(self):
+        try:
+            self.releaseKeyboard()
+        except Exception:
+            pass
+        self.reject()
+
+    def event(self, event):
+        # Interceptar pulsaciones de tecla y ShortcutOverride antes de que Qt las consuma
+        if event.type() == QEvent.ShortcutOverride:
+            event.accept()
+            return True
+        if event.type() == QEvent.KeyPress:
+            self.keyPressEvent(event)
+            return True
+        if event.type() == QEvent.KeyRelease:
+            self.keyReleaseEvent(event)
+            return True
+        return super().event(event)
 
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()
-        # Ignorar teclas modificadoras solas
+        modifiers = event.modifiers()
+
+        # Si solo se presionó una tecla modificadora sola (Ctrl, Alt, Shift, Meta)
         if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta):
+            mod_names = []
+            if (modifiers & Qt.ControlModifier) or key == Qt.Key_Control:
+                mod_names.append("Ctrl")
+            if (modifiers & Qt.AltModifier) or key == Qt.Key_Alt:
+                mod_names.append("Alt")
+            if (modifiers & Qt.ShiftModifier) or key == Qt.Key_Shift:
+                mod_names.append("Shift")
+            if (modifiers & Qt.MetaModifier) or key == Qt.Key_Meta:
+                mod_names.append("Win")
+            self.status_label.setText(f"{' + '.join(mod_names)} + ...")
+            self.status_label.setStyleSheet("color: #93c5fd; font-size: 11pt; font-weight: bold;")
             event.accept()
             return
 
-        name = qt_key_to_name(key)
+        name = qt_event_to_shortcut_name(event)
         self.captured_key_name = name
-        self.accept()
+        self.status_label.setText(f"✓ Tecla asignada: {name}")
+        self.status_label.setStyleSheet("color: #4ade80; font-size: 12pt; font-weight: bold;")
+        event.accept()
+
+        try:
+            self.releaseKeyboard()
+        except Exception:
+            pass
+        # Un brevísimo retraso para que el usuario aprecie la confirmación visual en pantalla
+        QTimer.singleShot(160, self.accept)
+
+    def keyReleaseEvent(self, event: QKeyEvent):
+        key = event.key()
+        if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta):
+            modifiers = event.modifiers()
+            mod_names = []
+            if modifiers & Qt.ControlModifier:
+                mod_names.append("Ctrl")
+            if modifiers & Qt.AltModifier:
+                mod_names.append("Alt")
+            if modifiers & Qt.ShiftModifier:
+                mod_names.append("Shift")
+            if modifiers & Qt.MetaModifier:
+                mod_names.append("Win")
+            if mod_names:
+                self.status_label.setText(f"{' + '.join(mod_names)} + ...")
+                self.status_label.setStyleSheet("color: #93c5fd; font-size: 11pt; font-weight: bold;")
+            else:
+                self.status_label.setText("Presioná una tecla en el teclado...")
+                self.status_label.setStyleSheet("color: #e2e8f0; font-size: 11pt; font-weight: bold;")
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
 
 class SystemSettingsWidget(QWidget):
@@ -304,15 +387,18 @@ class SystemSettingsWidget(QWidget):
         for row, info in enumerate(bindings):
             item_name = QTableWidgetItem(info["name"])
             item_name.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            item_name.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.controls_table.setItem(row, 0, item_name)
 
             item_desc = QTableWidgetItem(info["desc"])
             item_desc.setForeground(Qt.gray)
+            item_desc.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.controls_table.setItem(row, 1, item_desc)
 
             key_badge = QTableWidgetItem(f"  {info['key']}  ")
             key_badge.setTextAlignment(Qt.AlignCenter)
             key_badge.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            key_badge.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.controls_table.setItem(row, 2, key_badge)
 
             btn_change = QPushButton("Cambiar Tecla…")

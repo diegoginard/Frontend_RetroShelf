@@ -93,7 +93,7 @@ VK_MAP = {
     "F12": 0x7B,
 }
 
-# Mapa de Qt.Key a nombres amigables
+# Mapa exhaustivo de Qt.Key a nombres amigables
 QT_TO_NAME = {
     Qt.Key_Escape: "Escape",
     Qt.Key_Return: "Return",
@@ -108,6 +108,7 @@ QT_TO_NAME = {
     Qt.Key_Home: "Home",
     Qt.Key_End: "End",
     Qt.Key_Tab: "Tab",
+    Qt.Key_Backtab: "Tab",
     Qt.Key_Backspace: "Backspace",
     Qt.Key_Delete: "Delete",
     Qt.Key_Insert: "Insert",
@@ -125,19 +126,26 @@ QT_TO_NAME = {
     Qt.Key_F12: "F12",
 }
 
-# Mapa de nombres a lista de Qt.Key equivalentes
-NAME_TO_QT = {
-    "Escape": [Qt.Key_Escape],
-    "Return": [Qt.Key_Return, Qt.Key_Enter],
-    "Space": [Qt.Key_Space],
-    "Up": [Qt.Key_Up],
-    "Down": [Qt.Key_Down],
-    "Left": [Qt.Key_Left],
-    "Right": [Qt.Key_Right],
-    "PageUp": [Qt.Key_PageUp],
-    "PageDown": [Qt.Key_PageDown],
-    "Tab": [Qt.Key_Tab],
-}
+# Agregar letras A-Z y números 0-9 al diccionario
+for _c in range(ord('A'), ord('Z') + 1):
+    _ch = chr(_c)
+    _qt = getattr(Qt, f"Key_{_ch}", None)
+    if _qt is not None:
+        QT_TO_NAME[_qt] = _ch
+        VK_MAP.setdefault(_ch, _c)
+
+for _n in range(10):
+    _ch = str(_n)
+    _qt = getattr(Qt, f"Key_{_ch}", None)
+    if _qt is not None:
+        QT_TO_NAME[_qt] = _ch
+        VK_MAP.setdefault(_ch, ord('0') + _n)
+
+# Mapa invertido de nombres a lista de Qt.Key equivalentes
+NAME_TO_QT = {}
+for _k, _name in QT_TO_NAME.items():
+    NAME_TO_QT.setdefault(_name, []).append(_k)
+NAME_TO_QT.setdefault("Enter", [Qt.Key_Return, Qt.Key_Enter])
 
 # Alias secundarios por defecto (por conveniencia de teclado)
 ACTION_ALIASES = {
@@ -150,8 +158,10 @@ ACTION_ALIASES = {
 
 
 def key_name_to_vk(key_name: str) -> int:
-    """Convierte un nombre de tecla a su código Virtual Key (VK) de Windows."""
+    """Convierte un nombre de tecla (o shortcut) a su código Virtual Key (VK) de Windows."""
     name = (key_name or "").strip()
+    if "+" in name:
+        name = name.split("+")[-1].strip()
     if name in VK_MAP:
         return VK_MAP[name]
     if len(name) == 1:
@@ -172,9 +182,61 @@ def qt_key_to_name(qt_key: int) -> str:
     return f"Key_{qt_key}"
 
 
+def qt_event_to_shortcut_name(event) -> str:
+    """Construye un nombre amigable para un evento de teclado, incluyendo modificadores."""
+    key = event.key()
+    modifiers = event.modifiers()
+
+    mod_parts = []
+    if modifiers & Qt.ControlModifier:
+        mod_parts.append("Ctrl")
+    if modifiers & Qt.AltModifier:
+        mod_parts.append("Alt")
+    if modifiers & Qt.ShiftModifier and key not in (Qt.Key_Shift,):
+        # Solo agregar Shift si la tecla no es Shift sola
+        mod_parts.append("Shift")
+    if modifiers & Qt.MetaModifier:
+        mod_parts.append("Win")
+
+    base_name = qt_key_to_name(key)
+    if mod_parts and base_name not in ("Control", "Shift", "Alt", "Meta"):
+        return f"{'+'.join(mod_parts)}+{base_name}"
+    return base_name
+
+
+def parse_shortcut(shortcut_str: str) -> tuple[list[int], int]:
+    """
+    Parsea una cadena como 'Ctrl+Q' o 'Escape' y retorna:
+    (lista de Qt.Key posibles, máscara de modificadores Qt.KeyboardModifier)
+    """
+    s = (shortcut_str or "").strip()
+    if not s:
+        return ([Qt.Key_Escape], 0)
+
+    parts = [p.strip() for p in s.split("+")]
+    base_name = parts[-1]
+    mod_mask = 0
+
+    for m in parts[:-1]:
+        m_lower = m.lower()
+        if m_lower == "ctrl":
+            mod_mask |= int(getattr(Qt.ControlModifier, "value", Qt.ControlModifier))
+        elif m_lower == "alt":
+            mod_mask |= int(getattr(Qt.AltModifier, "value", Qt.AltModifier))
+        elif m_lower == "shift":
+            mod_mask |= int(getattr(Qt.ShiftModifier, "value", Qt.ShiftModifier))
+        elif m_lower in ("win", "meta", "cmd"):
+            mod_mask |= int(getattr(Qt.MetaModifier, "value", Qt.MetaModifier))
+
+    keys = name_to_qt_keys(base_name)
+    return (keys, mod_mask)
+
+
 def name_to_qt_keys(key_name: str) -> list[int]:
     """Convierte un nombre de tecla a los códigos Qt.Key equivalentes."""
     name = (key_name or "").strip()
+    if "+" in name:
+        name = name.split("+")[-1].strip()
     if name in NAME_TO_QT:
         return NAME_TO_QT[name]
     if len(name) == 1:
@@ -194,7 +256,11 @@ def get_binding(db, action: str) -> str:
             default = info["default"]
             break
     if db is None:
-        return default
+        try:
+            from retroshelf.db import Database
+            db = Database()
+        except Exception:
+            return default
     return db.get_setting(f"control_{action}", default)
 
 
@@ -226,20 +292,42 @@ def get_all_bindings(db) -> list[dict]:
     return result
 
 
-def matches_action(event_key: int, action: str, db=None) -> bool:
+def matches_action(event_or_key, action: str, db=None) -> bool:
     """
-    Verifica si la tecla presionada (código Qt.Key) coincide con la tecla asignada
-    para una acción, incluyendo alias estándar si la tecla es la predeterminada.
+    Verifica si una tecla o evento QKeyEvent coincide con la acción asignada,
+    soportando modificadores (ej: Ctrl+Q) y alias secundarios por defecto.
+    Acepta tanto un objeto QKeyEvent como un entero Qt.Key.
     """
+    if hasattr(event_or_key, "key"):
+        ev_key = event_or_key.key()
+        mods = event_or_key.modifiers()
+        ev_mods = int(getattr(mods, "value", mods))
+    else:
+        ev_key = int(event_or_key)
+        ev_mods = 0
+
     assigned = get_binding(db, action)
-    target_keys = name_to_qt_keys(assigned)
-    if event_key in target_keys:
-        return True
+    target_keys, req_mods = parse_shortcut(assigned)
+
+    ctrl_val = int(getattr(Qt.ControlModifier, "value", Qt.ControlModifier))
+    alt_val = int(getattr(Qt.AltModifier, "value", Qt.AltModifier))
+    ctrl_alt = ctrl_val | alt_val
+
+    # Si se especificaron modificadores requeridos (ej: Ctrl+Q, Alt+F4)
+    if req_mods != 0:
+        if ev_key in target_keys and (ev_mods & req_mods) == req_mods:
+            return True
+    else:
+        # Si la acción asignada no requiere modificadores, ignorar si Ctrl o Alt están activos
+        if ev_mods & ctrl_alt:
+            return False
+        if ev_key in target_keys:
+            return True
 
     # Si la acción está en su valor predeterminado, admitir también alias secundarios estándar
     default = next((info["default"] for info in ACTIONS_INFO if info["id"] == action), "")
     if assigned == default and action in ACTION_ALIASES:
-        if event_key in ACTION_ALIASES[action]:
+        if ev_key in ACTION_ALIASES[action] and not (ev_mods & ctrl_alt):
             return True
 
     return False
