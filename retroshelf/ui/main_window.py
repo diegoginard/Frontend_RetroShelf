@@ -2,7 +2,7 @@ import sys
 import os
 import subprocess
 from pathlib import Path
-from PySide6.QtCore import Qt, QSize, QPoint, QTimer
+from PySide6.QtCore import Qt, QSize, QPoint, QTimer, QUrl
 from PySide6.QtGui import QAction, QFont, QIcon, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -1095,6 +1095,22 @@ class MainWindow(QMainWindow):
         if current_layout:
             current_layout.db = self.db
         self.statusBar().showMessage("Configuración del sistema actualizada correctamente.", 3500)
+
+    def closeEvent(self, event):
+        """Detiene cualquier reproducción activa antes de cerrar la ventana para evitar errores de Media Foundation."""
+        for inst in getattr(self, "active_layouts", {}).values():
+            if hasattr(inst, "stop_media") and callable(inst.stop_media):
+                try:
+                    inst.stop_media()
+                except Exception:
+                    pass
+            elif hasattr(inst, "player") and inst.player:
+                try:
+                    inst.player.stop()
+                    inst.player.setSource(QUrl())
+                except Exception:
+                    pass
+        super().closeEvent(event)
 
 
 def run():

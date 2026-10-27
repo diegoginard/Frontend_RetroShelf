@@ -30,7 +30,7 @@ call .venv\Scripts\activate.bat
 echo [*] Abriendo Configurador de RetroShelf...
 "%~dp0.venv\Scripts\python.exe" -m retroshelf
 
-if %errorlevel% neq 0 if %errorlevel% neq -805306369 if %errorlevel% neq 3221225477 (
+if %errorlevel% neq 0 if %errorlevel% neq -805306369 if %errorlevel% neq 3221225477 if %errorlevel% neq -1073740940 if %errorlevel% neq 3221226356 (
     echo.
     echo [!] La aplicacion se cerro con codigo %errorlevel%.
     pause
