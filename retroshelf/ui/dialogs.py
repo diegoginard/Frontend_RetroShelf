@@ -206,13 +206,14 @@ class ListDialog(QDialog):
         auto_det_row.addStretch()
         media_layout.addRow("", self.auto_det_row_widget)
 
-        # Contenedor dinámico de medios específicos según el layout elegido
-        self.dynamic_media_container = QWidget()
-        self.dynamic_media_layout = QFormLayout(self.dynamic_media_container)
-        self.dynamic_media_layout.setContentsMargins(0, 0, 0, 0)
-        self.dynamic_media_layout.setSpacing(8)
-        media_layout.addRow(self.dynamic_media_container)
+        # Contenedor wrapper para alojar el formulario dinámico de medios
+        self.dynamic_media_wrapper = QWidget()
+        self.dynamic_media_wrapper_layout = QVBoxLayout(self.dynamic_media_wrapper)
+        self.dynamic_media_wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        self.dynamic_media_wrapper_layout.setSpacing(0)
+        media_layout.addRow(self.dynamic_media_wrapper)
 
+        self.dynamic_media_container = None
         self.media_edits = {}
         self._media_values = {}
 
@@ -345,12 +346,16 @@ class ListDialog(QDialog):
             if txt:
                 self._media_values[key] = txt
 
-        # 2. Limpiar widgets anteriores
-        while self.dynamic_media_layout.count():
-            item = self.dynamic_media_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+        # 2. Reemplazar contenedor dinámico limpiamente
+        if hasattr(self, "dynamic_media_container") and self.dynamic_media_container is not None:
+            self.dynamic_media_container.setParent(None)
+            self.dynamic_media_container.deleteLater()
+
+        self.dynamic_media_container = QWidget()
+        dynamic_layout = QFormLayout(self.dynamic_media_container)
+        dynamic_layout.setContentsMargins(0, 0, 0, 0)
+        dynamic_layout.setSpacing(8)
+        self.dynamic_media_wrapper_layout.addWidget(self.dynamic_media_container)
 
         self.media_edits.clear()
 
@@ -389,7 +394,7 @@ class ListDialog(QDialog):
             row_widget = QWidget()
             row_widget.setLayout(row_layout)
 
-            self.dynamic_media_layout.addRow(label_text, row_widget)
+            dynamic_layout.addRow(label_text, row_widget)
             self.media_edits[key] = edit
 
     @property

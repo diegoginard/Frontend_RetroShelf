@@ -47,9 +47,8 @@ def get_all_theme_layouts(force_reload: bool = False) -> dict[str, dict]:
         if entry.name.startswith((".", "_")):
             continue
         folder = Path(entry.path)
-        # Para ser reconocido como layout, la carpeta DEBE contener ambos archivos:
-        # theme_layout.py (lógica y vista) y layout.json (requerimientos de medios y configuración)
-        if not (folder / "theme_layout.py").is_file() or not (folder / "layout.json").is_file():
+        # Solo registrar carpetas que contengan theme_layout.py
+        if not (folder / "theme_layout.py").is_file():
             continue
 
         themes[entry.name] = {
@@ -158,32 +157,75 @@ GENERIC_MEDIA_SPECS: dict[str, list[dict]] = {
 def get_layout_media_spec(layout_name: str) -> list[dict]:
     """
     Obtiene la especificación de medios requeridos por un layout:
-    1. Si es un tema de sistema, lee 'layout.json' en su carpeta.
-    2. Si es un layout genérico estándar, retorna su especificación por defecto.
+    1. Si es un layout genérico estándar, retorna su especificación predefinida.
+    2. Si es un tema de sistema, lee los requerimientos directamente desde su 'theme_layout.py'
+       (mediante MEDIA_REQUIREMENTS o deducción autónoma de sus recursos).
     3. Si no existe especificación, retorna lista vacía.
     """
-    import json
-
     if not layout_name:
         return []
 
-    info = get_theme_info(layout_name)
-    if info and info.get("folder"):
-        th_folder = Path(info["folder"])
-        json_file = th_folder / "layout.json"
-        if json_file.is_file():
-            try:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, dict) and "media" in data and isinstance(data["media"], list):
-                        return data["media"]
-            except Exception as e:
-                print(f"[RetroShelf] Error al leer {json_file}: {e}")
-
-    # Layouts genéricos estándar
+    # 1. Layouts genéricos estándar
     for name, spec in GENERIC_MEDIA_SPECS.items():
         if layout_name.lower() == name.lower():
             return spec
+
+    # 2. Temas autónomos: leer directamente desde ThemeLayout en theme_layout.py
+    info = get_theme_info(layout_name)
+    if info and info.get("folder"):
+        th_folder = Path(info["folder"])
+        th_file = th_folder / "theme_layout.py"
+        if th_file.is_file():
+            try:
+                from retroshelf.ui.layouts.theme_layout import get_theme_layout_class
+                cls = get_theme_layout_class(layout_name)
+                if cls:
+                    # Atributo explícito MEDIA_REQUIREMENTS
+                    if hasattr(cls, "MEDIA_REQUIREMENTS") and cls.MEDIA_REQUIREMENTS:
+                        return list(cls.MEDIA_REQUIREMENTS)
+                    if hasattr(cls, "get_media_requirements") and callable(cls.get_media_requirements):
+                        return list(cls.get_media_requirements())
+
+                    # Auto-detección desde los componentes declarados en ThemeLayout
+                    detected = []
+                    if getattr(cls, "TV_RECT", None) or getattr(cls, "TV_IMAGE", None):
+                        detected.append({
+                            "key": "video",
+                            "label": "Video Snaps",
+                            "folder": "videos",
+                            "extensions": [".mp4", ".mkv", ".avi", ".webm"],
+                            "required": True
+                        })
+                    if getattr(cls, "WHEEL_IMAGE", None):
+                        detected.append({
+                            "key": "wheel",
+                            "label": "Wheel Logos",
+                            "folder": "wheel",
+                            "extensions": [".png", ".webp"],
+                            "required": True
+                        })
+                    if getattr(cls, "CARTART_IMAGE", None):
+                        is_cd = getattr(cls, "IS_CD", False) or "disc" in str(getattr(cls, "CARTART_IMAGE", "")).lower()
+                        lbl = "Discos" if is_cd else "Cartuchos"
+                        detected.append({
+                            "key": "cartart",
+                            "label": lbl,
+                            "folder": "cartart",
+                            "extensions": [".png", ".webp"],
+                            "required": True
+                        })
+                    if getattr(cls, "BOXART_IMAGE", None):
+                        detected.append({
+                            "key": "boxart",
+                            "label": "Box Art / Carátulas",
+                            "folder": "boxart",
+                            "extensions": [".png", ".jpg", ".jpeg", ".webp"],
+                            "required": False
+                        })
+                    if detected:
+                        return detected
+            except Exception as e:
+                print(f"[RetroShelf] Error al leer requerimientos de {th_file}: {e}")
 
     return []
 

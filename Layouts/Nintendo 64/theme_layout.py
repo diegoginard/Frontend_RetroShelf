@@ -39,6 +39,33 @@ class ThemeLayout(BaseLayout):
     CANONICAL_H = 1080
 
     # -------------------------------------------------------------------------
+    # REQUERIMIENTOS DE MEDIOS PARA ESTE LAYOUT (LEÍDOS DIRECTAMENTE POR EL SISTEMA)
+    # -------------------------------------------------------------------------
+    MEDIA_REQUIREMENTS = [
+        {
+            "key": "video",
+            "label": "Video Snaps",
+            "folder": "videos",
+            "extensions": [".mp4", ".mkv", ".avi", ".webm"],
+            "required": True
+        },
+        {
+            "key": "wheel",
+            "label": "Wheel Logos",
+            "folder": "wheel",
+            "extensions": [".png", ".webp"],
+            "required": True
+        },
+        {
+            "key": "cartart",
+            "label": "Cartuchos",
+            "folder": "cartart",
+            "extensions": [".png", ".webp"],
+            "required": True
+        }
+    ]
+
+    # -------------------------------------------------------------------------
     # ASIGNACIÓN DE ARCHIVOS PROPIOS DEL LAYOUT (ADMINISTRADOS POR ESTE ARCHIVO)
     # -------------------------------------------------------------------------
     BKG_IMAGE = "bkg.jpg"
