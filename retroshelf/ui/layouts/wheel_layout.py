@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from retroshelf.ui.layouts.base import BaseLayout
-from retroshelf.services.media import resolve_game_media
+from retroshelf.services.media import resolve_game_media, find_media_file, IMAGE_EXTS
 from retroshelf.ui.cover_utils import load_cover
 from retroshelf.services.controls import (
     matches_action, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_SELECT, ACTION_MUTE, ACTION_NAV_BACK
@@ -81,10 +81,18 @@ class WheelItemDelegate(QStyledItemDelegate):
             painter.setPen(QPen(border_color, border_width))
             painter.drawPath(path)
 
-            # Obtener o resolver imagen de Wheel Logo
+            # Obtener o resolver imagen de Wheel Logo (búsqueda O(1) en memoria solo para wheel)
             if game_id not in self._wheel_cache:
-                media = resolve_game_media(game.get("rom_path", ""), game)
-                wheel_file = media.get("wheel")
+                wheel_file = None
+                if game.get("is_menu_target"):
+                    media = resolve_game_media(game.get("rom_path", ""), game)
+                    wheel_file = media.get("wheel")
+                else:
+                    w_folder = game.get("wheel_path")
+                    rom_p = game.get("rom_path", "")
+                    stem = game.get("rom_name") or (Path(rom_p).stem if rom_p else "")
+                    if w_folder and stem:
+                        wheel_file = find_media_file(w_folder, stem, IMAGE_EXTS)
                 if wheel_file and os.path.isfile(wheel_file):
                     pix = QPixmap(wheel_file)
                     self._wheel_cache[game_id] = pix if not pix.isNull() else None
@@ -288,10 +296,16 @@ class WheelLayout(BaseLayout):
         main_layout.addWidget(right_panel, 4)
 
         # Timer para debounce de video al desplazarse rápidamente por la rueda
+        self._want_video_playing = False
         self.video_timer = QTimer(self)
         self.video_timer.setSingleShot(True)
-        self.video_timer.setInterval(300)
+        self.video_timer.setInterval(160)
         self.video_timer.timeout.connect(self._start_video)
+
+        self._video_watchdog_timer = QTimer(self)
+        self._video_watchdog_timer.setSingleShot(True)
+        self._video_watchdog_timer.setInterval(1200)
+        self._video_watchdog_timer.timeout.connect(self._on_video_watchdog)
 
         # Timer para inicialización diferida del reproductor de video
         self._init_timer = QTimer(self)
@@ -323,6 +337,7 @@ class WheelLayout(BaseLayout):
             self.player.setAudioOutput(self.audio_output)
             self.player.setVideoOutput(self.video_widget)
             self.player.setLoops(QMediaPlayer.Infinite)
+            self.player.mediaStatusChanged.connect(self._on_media_status_changed)
             self.player.errorOccurred.connect(self._on_player_error)
 
             self._player_initialized = True
@@ -335,6 +350,46 @@ class WheelLayout(BaseLayout):
             # Si falla (driver incompatible), seguimos sin video — no crashea la app
             print(f"[WheelLayout] No se pudo inicializar el reproductor de video: {e}")
             self._player_initialized = True  # Marcar como "intentado" para no reintentar
+
+    def _on_media_status_changed(self, status):
+        if not self.player:
+            return
+        try:
+            from PySide6.QtMultimedia import QMediaPlayer
+            if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
+                if self._want_video_playing:
+                    if self.audio_output:
+                        self.audio_output.setVolume(0.35)
+                    if self.player.playbackState() != QMediaPlayer.PlayingState:
+                        self.player.play()
+                else:
+                    if self.audio_output:
+                        self.audio_output.setVolume(0.0)
+                    if status == QMediaPlayer.BufferedMedia:
+                        self.player.pause()
+            elif status == QMediaPlayer.EndOfMedia:
+                if self._want_video_playing:
+                    self.player.setPosition(0)
+                    self.player.play()
+        except Exception:
+            pass
+
+    def _on_video_watchdog(self):
+        if not self._want_video_playing or not self.player:
+            return
+        video_file = self.current_media.get("video")
+        if video_file and os.path.isfile(video_file):
+            try:
+                from PySide6.QtMultimedia import QMediaPlayer
+                if self.player.mediaStatus() in (QMediaPlayer.LoadingMedia, QMediaPlayer.BufferingMedia) and self.player.playbackState() == QMediaPlayer.PlayingState:
+                    return
+                src_url = QUrl.fromLocalFile(video_file)
+                if self.player.source() != src_url:
+                    self.player.setSource(src_url)
+                if self.player.playbackState() != QMediaPlayer.PlayingState:
+                    self.player.play()
+            except Exception:
+                pass
 
     def _on_player_error(self, error, error_string=""):
         if self.player:
@@ -362,6 +417,7 @@ class WheelLayout(BaseLayout):
 
         self.delegate.invalidate_cache()
         self.wheel_list.blockSignals(True)
+        self.wheel_list.setUpdatesEnabled(False)
         self.wheel_list.clear()
 
         target_item = None
@@ -379,14 +435,19 @@ class WheelLayout(BaseLayout):
 
         if target_item:
             self.wheel_list.setCurrentItem(target_item)
+            self.wheel_list.setUpdatesEnabled(True)
             self.wheel_list.blockSignals(False)
             self._update_game_display(target_item.data(Qt.UserRole + 10))
         else:
+            self.wheel_list.setUpdatesEnabled(True)
             self.wheel_list.blockSignals(False)
             self.current_game_id = None
             self._clear_game_display()
 
     def select_game_by_id(self, game_id: int):
+        curr = self.wheel_list.currentItem()
+        if curr and curr.data(Qt.UserRole) == game_id and self.current_game_id == game_id:
+            return
         self.current_game_id = game_id
         target_item = None
         for i in range(self.wheel_list.count()):
@@ -446,7 +507,20 @@ class WheelLayout(BaseLayout):
         if game.get("is_menu_target"):
             self.meta_label.setText(f"Sistema: <b>{plat}</b>   |   Contenido: <b>{emu}</b>")
         else:
-            self.meta_label.setText(f"Plataforma: <b>{plat}</b>   |   Emulador: <b>{emu}</b><br>Archivo: <span style='color:#6d7b93;'>{filename}</span>")
+            xml_bits = []
+            if game.get("year"):
+                xml_bits.append(f"<b>{game['year']}</b>")
+            if game.get("manufacturer"):
+                xml_bits.append(f"<b>{game['manufacturer']}</b>")
+            if game.get("genre"):
+                xml_bits.append(f"{game['genre']}")
+            if game.get("players"):
+                xml_bits.append(f"👥 {game['players']}")
+            xml_line = f"<br>{'   ·   '.join(xml_bits)}" if xml_bits else ""
+            self.meta_label.setText(
+                f"Plataforma: <b>{plat}</b>   |   Emulador: <b>{emu}</b>{xml_line}"
+                f"<br>Archivo: <span style='color:#6d7b93;'>{filename}</span>"
+            )
 
         # Resolver medios (boxart, wheel, video)
         rom_path = game.get("rom_path", "")
@@ -480,9 +554,16 @@ class WheelLayout(BaseLayout):
             self.wheel_logo_label.setVisible(False)
 
         # 3. Video Snap — solo si el player ya fue inicializado
+        self._want_video_playing = False
+        if hasattr(self, "_video_watchdog_timer"):
+            self._video_watchdog_timer.stop()
+        if self.audio_output:
+            self.audio_output.setVolume(0.0)
         if self.player:
             try:
-                self.player.stop()
+                from PySide6.QtMultimedia import QMediaPlayer
+                if self.player.mediaStatus() == QMediaPlayer.BufferedMedia:
+                    self.player.pause()
             except Exception:
                 pass
         if hasattr(self, "video_timer"):
@@ -491,17 +572,11 @@ class WheelLayout(BaseLayout):
         video_file = self.current_media.get("video")
         if video_file and os.path.isfile(video_file):
             if self._player_initialized and self.player:
-                self._video_stack.setCurrentIndex(1)  # mostrar video widget
                 self.video_timer.start()
             else:
                 # Player aún no listo: se reproducirá automáticamente al inicializar
                 self._video_stack.setCurrentIndex(0)
         else:
-            if self.player:
-                try:
-                    self.player.setSource(QUrl())
-                except Exception:
-                    pass
             self._video_stack.setCurrentIndex(0)  # mostrar placeholder
 
     def _start_video(self):
@@ -509,10 +584,18 @@ class WheelLayout(BaseLayout):
             return
         video_file = self.current_media.get("video")
         if video_file and os.path.isfile(video_file):
+            self._want_video_playing = True
             self._video_stack.setCurrentIndex(1)
             try:
-                self.player.setSource(QUrl.fromLocalFile(video_file))
+                if self.audio_output:
+                    self.audio_output.setVolume(0.35)
+                src_url = QUrl.fromLocalFile(video_file)
+                if self.player.source() == src_url:
+                    self.player.setPosition(0)
+                else:
+                    self.player.setSource(src_url)
                 self.player.play()
+                self._video_watchdog_timer.start()
             except Exception as e:
                 print(f"[WheelLayout] Error al reproducir video: {e}")
 

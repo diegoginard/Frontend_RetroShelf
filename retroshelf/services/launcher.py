@@ -10,18 +10,13 @@ def resolve_emulator(db, game):
     2. Emulador predeterminado de la lista.
     3. Si ninguno existe, retorna (None, "ninguno").
     """
-    if game["emulator_override_id"]:
-        row = db.one("SELECT * FROM emulators WHERE id=?", (game["emulator_override_id"],))
-        if row and row["id"] is not None:
+    if game.get("emulator_override_id"):
+        row = db.get_emulator(game["emulator_override_id"])
+        if row and row.get("id") is not None:
             return row, "juego"
 
-    row = db.one(
-        """SELECT e.* FROM game_lists l
-           LEFT JOIN emulators e ON e.id=l.default_emulator_id
-           WHERE l.id=?""",
-        (game["list_id"],)
-    )
-    if row and row["id"] is not None:
+    row = db.get_default_emulator_for_list(game["list_id"])
+    if row and row.get("id") is not None:
         return row, "lista"
 
     return None, "ninguno"

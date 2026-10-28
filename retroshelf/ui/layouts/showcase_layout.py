@@ -219,7 +219,17 @@ class ShowcaseLayout(BaseLayout):
         emu = game.get("effective_name", "Sin emulador")
         source = game.get("source", "")
         source_str = f" ({source})" if source else ""
-        self.emu_label.setText(f"Emulador: {emu}{source_str}")
+        xml_bits = []
+        if game.get("year"):
+            xml_bits.append(str(game["year"]))
+        if game.get("manufacturer"):
+            xml_bits.append(str(game["manufacturer"]))
+        if game.get("genre"):
+            xml_bits.append(str(game["genre"]))
+        if game.get("players"):
+            xml_bits.append(f"{game['players']} Jug.")
+        extra_meta = f"   |   {' · '.join(xml_bits)}" if xml_bits else ""
+        self.emu_label.setText(f"Emulador: {emu}{source_str}{extra_meta}")
 
         cover = load_cover(game.get("cover_path"), game["title"], game.get("platform"), QSize(180, 160))
         self.cover_label.set_cover(cover)

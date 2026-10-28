@@ -1,6 +1,7 @@
 import sys
 import subprocess
 from pathlib import Path
+import retroshelf
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer
 from PySide6.QtGui import QFont, QKeySequence, QShortcut, QGuiApplication
 from PySide6.QtWidgets import (
@@ -8,6 +9,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QMessageBox, QStackedWidget, QFrame, QScrollArea
 )
 from retroshelf.db import Database
+from retroshelf.services.library import enrich_game_dict
 from retroshelf.services.launcher import launch_game
 from retroshelf.services.controls import (
     ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_BACK, ACTION_SELECT,
@@ -153,17 +155,9 @@ class PlayerWindow(QMainWindow):
 
         main_layout.addLayout(top_bar)
 
-        # 2. Contenedor de Layouts Dinámicos (Grid, Showcase, Banners, Detalles)
+        # 2. Contenedor de Layouts Dinámicos (se instancian bajo demanda)
         self.layout_stack = QStackedWidget()
         self.active_layouts = {}
-
-        for l_name, l_cls in LAYOUT_REGISTRY.items():
-            inst = l_cls()
-            inst.game_selected.connect(self._on_game_selected)
-            inst.game_activated.connect(self._on_game_activated)
-            self.active_layouts[l_name] = inst
-            self.layout_stack.addWidget(inst)
-
         main_layout.addWidget(self.layout_stack, 1)
 
         # 3. Barra inferior informativa y discreta
@@ -386,13 +380,7 @@ class PlayerWindow(QMainWindow):
             btn.deleteLater()
         self.platform_buttons.clear()
 
-        rows = self.db.all(
-            """SELECT l.*, COUNT(g.id) AS game_count
-               FROM game_lists l
-               LEFT JOIN games g ON g.list_id = l.id
-               GROUP BY l.id
-               ORDER BY l.name COLLATE NOCASE"""
-        )
+        rows = self.db.get_lists(with_counts=True)
 
         if not rows:
             self.status_label.setText("No hay listas creadas. Abrí el Configurador para crear listas y añadir juegos.")
@@ -444,7 +432,7 @@ class PlayerWindow(QMainWindow):
         for lid, btn in self.platform_buttons:
             btn.setChecked(lid == list_id)
 
-        row = self.db.one("SELECT * FROM game_lists WHERE id=?", (list_id,))
+        row = self.db.get_list(list_id)
         if not row:
             return
 
@@ -487,7 +475,7 @@ class PlayerWindow(QMainWindow):
             self.games_cache = []
             return
 
-        row = self.db.one("SELECT * FROM game_lists WHERE id=?", (self.current_list_id,))
+        row = self.db.get_list(self.current_list_id)
         if not row:
             return
 
@@ -508,8 +496,7 @@ class PlayerWindow(QMainWindow):
                 platform = t_dict["platform"] or title
                 if term and (term not in title.lower() and term not in platform.lower()):
                     continue
-                cnt_row = self.db.one("SELECT COUNT(*) as c FROM games WHERE list_id=?", (t_dict["id"],))
-                g_count = cnt_row["c"] if cnt_row else 0
+                g_count = self.db.count_games(t_dict["id"])
                 items.append({
                     "id": t_dict["id"],
                     "target_list_id": t_dict["id"],
@@ -543,24 +530,8 @@ class PlayerWindow(QMainWindow):
                     self.status_label.setText("No hay sistemas en este menú. Agregalos desde el Configurador.")
             return
 
-        rows = self.db.all(
-            """SELECT g.*, l.default_emulator_id, l.platform,
-               l.boxart_path, l.wheel_path, l.video_path, l.cartart_path, l.media_path,
-               COALESCE(override.name, base.name, 'Sin emulador') AS effective_name,
-               CASE
-                   WHEN g.emulator_override_id IS NOT NULL THEN 'juego'
-                   WHEN l.default_emulator_id IS NOT NULL THEN 'lista'
-                   ELSE 'ninguno'
-               END AS source
-               FROM games g
-               JOIN game_lists l ON l.id = g.list_id
-               LEFT JOIN emulators override ON override.id = g.emulator_override_id
-               LEFT JOIN emulators base ON base.id = l.default_emulator_id
-               WHERE g.list_id = ? AND (g.title LIKE ? OR g.rom_path LIKE ?)
-               ORDER BY g.title COLLATE NOCASE""",
-            (self.current_list_id, f"%{term}%", f"%{term}%")
-        )
-        self.games_cache = [dict(r) for r in rows]
+        rows = self.db.get_games(self.current_list_id, search_term=term, enriched=True)
+        self.games_cache = [enrich_game_dict(r) for r in rows]
 
         current_layout = self.layout_stack.currentWidget()
 
@@ -586,7 +557,15 @@ class PlayerWindow(QMainWindow):
                 )
             else:
                 emu = game.get("effective_name", "Sin emulador")
-                self.status_label.setText(f"🎮 <b>{game['title']}</b>   |   Emulador: {emu}")
+                extra = []
+                if game.get("year"):
+                    extra.append(game["year"])
+                if game.get("manufacturer"):
+                    extra.append(game["manufacturer"])
+                if game.get("genre"):
+                    extra.append(game["genre"])
+                extra_str = f"   |   {' · '.join(extra)}" if extra else ""
+                self.status_label.setText(f"🎮 <b>{game['title']}</b>{extra_str}   |   Emulador: {emu}")
 
     def _on_game_activated(self, game_id: int):
         self.current_game_id = game_id
@@ -596,7 +575,7 @@ class PlayerWindow(QMainWindow):
             self.select_list(target_id, push_history=True)
             return
 
-        db_game = self.db.one("SELECT * FROM games WHERE id=?", (game_id,))
+        db_game = self.db.get_game(game_id)
         if not db_game:
             return
 

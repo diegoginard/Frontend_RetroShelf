@@ -2,24 +2,18 @@ import os
 import random
 from pathlib import Path
 
-# Directorio raíz del proyecto RetroShelf
+# Directorio raíz del proyecto RetroShelf (todo dentro de la carpeta de RetroShelf)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-APP_DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "RetroShelf"
+APP_DATA_DIR = REPO_ROOT
 
 
 def get_layouts_root() -> Path:
     """
-    Retorna la ruta a la carpeta 'Layouts' principal.
-    Prioriza la carpeta 'Layouts' en la raíz del repositorio/ejecutable.
-    Si no existe, busca o crea la carpeta en el directorio de datos de usuario (APPDATA).
+    Retorna la ruta a la carpeta 'Layouts' principal dentro de la carpeta de RetroShelf.
     """
     repo_layouts = REPO_ROOT / "Layouts"
-    if repo_layouts.is_dir():
-        return repo_layouts
-
-    app_layouts = APP_DATA_DIR / "Layouts"
-    app_layouts.mkdir(parents=True, exist_ok=True)
-    return app_layouts
+    repo_layouts.mkdir(parents=True, exist_ok=True)
+    return repo_layouts
 
 
 _THEMES_CACHE: dict[str, dict] | None = None

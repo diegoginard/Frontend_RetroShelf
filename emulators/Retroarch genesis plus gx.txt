@@ -1,0 +1,7 @@
+# Configuración de Emulador: Retroarch genesis plus gx
+id = 8
+name = Retroarch genesis plus gx
+executable = C:/Attract/Emu/RetroArch/retroarch.exe
+arguments = -f -L "C:\Attract\Emu\RetroArch\cores\genesis_plus_gx_libretro.dll" "{rom}"
+platform = 
+created_at = 2026-10-26 03:02:30

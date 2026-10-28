@@ -24,7 +24,7 @@ class BaseLayout(QWidget):
         self.current_game_id = None
 
     def set_games(self, games: list):
-        """Recibe la lista de juegos a mostrar (diccionarios o sqlite3.Row)."""
+        """Recibe la lista de juegos a mostrar (diccionarios de juegos)."""
         self.games = [dict(g) if hasattr(g, "keys") else g for g in games]
         self.render_games()
 

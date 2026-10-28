@@ -22,16 +22,23 @@ class TableLayout(BaseLayout):
 
         self._size_cache: dict[str, str] = {}
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Título", "Archivo", "Formato", "Tamaño", "Emulador efectivo"])
+        self.table = QTableWidget(0, 8)
+        self.table.setHorizontalHeaderLabels(["Título", "ROM / Archivo", "Año", "Fabricante", "Género", "Formato", "Tamaño", "Emulador efectivo"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
-        self.table.setColumnWidth(2, 75)
-        self.table.setColumnWidth(3, 90)
-        self.table.setColumnWidth(4, 180)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Interactive)
+        self.table.setColumnWidth(1, 120)
+        self.table.setColumnWidth(2, 65)
+        self.table.setColumnWidth(3, 130)
+        self.table.setColumnWidth(4, 120)
+        self.table.setColumnWidth(5, 75)
+        self.table.setColumnWidth(6, 90)
+        self.table.setColumnWidth(7, 170)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -68,7 +75,10 @@ class TableLayout(BaseLayout):
             file_item.setToolTip(rom_path)
             self.table.setItem(i, 1, file_item)
 
-            self.table.setItem(i, 2, QTableWidgetItem(ext.lower()))
+            self.table.setItem(i, 2, QTableWidgetItem(g.get("year") or "—"))
+            self.table.setItem(i, 3, QTableWidgetItem(g.get("manufacturer") or "—"))
+            self.table.setItem(i, 4, QTableWidgetItem(g.get("genre") or "—"))
+            self.table.setItem(i, 5, QTableWidgetItem(ext.lower()))
 
             size_str = self._size_cache.get(rom_path)
             if size_str is None:
@@ -79,12 +89,12 @@ class TableLayout(BaseLayout):
                 except OSError:
                     size_str = "—"
                 self._size_cache[rom_path] = size_str
-            self.table.setItem(i, 3, QTableWidgetItem(size_str))
+            self.table.setItem(i, 6, QTableWidgetItem(size_str))
 
             emu = g.get("effective_name", "Sin emulador")
             source = g.get("source", "")
             source_str = f" ({source})" if source else ""
-            self.table.setItem(i, 4, QTableWidgetItem(f"{emu}{source_str}"))
+            self.table.setItem(i, 7, QTableWidgetItem(f"{emu}{source_str}"))
 
         self.table.setUpdatesEnabled(True)
         self.table.blockSignals(False)

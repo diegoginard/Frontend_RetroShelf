@@ -8,7 +8,10 @@ from PySide6.QtWidgets import (
     QTextEdit, QAbstractItemView, QCheckBox, QSpinBox, QFrame,
     QListWidget, QListWidgetItem, QScrollArea
 )
-from retroshelf.services.library import normalize_extensions, parse_extensions_list
+from retroshelf.services.library import (
+    normalize_extensions, parse_extensions_list, parse_rom_xml,
+    parse_rom_folders, format_rom_folders
+)
 from retroshelf.services.media import detect_media_folders
 from retroshelf.services.themes import get_layout_media_spec
 
@@ -105,20 +108,81 @@ class ListDialog(QDialog):
         ext_hint.setWordWrap(True)
         game_form.addRow("", ext_hint)
 
-        self.folder_edit = QLineEdit()
-        self.folder_edit.setPlaceholderText("Seleccionar carpeta donde están los juegos...")
-        browse_folder_btn = QPushButton("Examinar…")
-        browse_folder_btn.clicked.connect(self.pick_folder)
-        folder_row = QHBoxLayout()
-        folder_row.addWidget(self.folder_edit, 1)
-        folder_row.addWidget(browse_folder_btn)
-        folder_holder = QWidget()
-        folder_holder.setLayout(folder_row)
-        game_form.addRow("Carpeta de juegos", folder_holder)
+        # Selector múltiple de carpetas de juegos (ROMs)
+        folders_vbox = QVBoxLayout()
+        folders_vbox.setContentsMargins(0, 0, 0, 0)
+        folders_vbox.setSpacing(6)
 
-        self.auto_scan_checkbox = QCheckBox("Escanear e importar juegos de esta carpeta automáticamente")
+        folders_top_row = QHBoxLayout()
+        folders_top_row.setContentsMargins(0, 0, 0, 0)
+        self.folders_list = QListWidget()
+        self.folders_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.folders_list.setFixedHeight(84)
+        self.folders_list.setStyleSheet(
+            "QListWidget { background-color: #171a23; border: 1px solid #2a3143; border-radius: 6px; padding: 3px; }"
+            "QListWidget::item { padding: 3px 6px; border-radius: 4px; }"
+            "QListWidget::item:hover { background-color: #23293a; }"
+            "QListWidget::item:selected { background-color: #5d48d9; color: white; }"
+        )
+        folders_top_row.addWidget(self.folders_list, 1)
+
+        folders_btns_col = QVBoxLayout()
+        folders_btns_col.setContentsMargins(0, 0, 0, 0)
+        folders_btns_col.setSpacing(4)
+        browse_folder_btn = QPushButton("＋ Agregar carpeta…")
+        browse_folder_btn.setToolTip("Elegir y agregar una carpeta de ROMs a la lista")
+        browse_folder_btn.clicked.connect(self.pick_folder)
+        remove_folder_btn = QPushButton("✕ Quitar seleccionada")
+        remove_folder_btn.setToolTip("Quitar la carpeta seleccionada de la lista")
+        remove_folder_btn.clicked.connect(self.remove_selected_folder)
+        clear_folders_btn = QPushButton("Limpiar todas")
+        clear_folders_btn.setToolTip("Vaciar todas las carpetas de ROMs configuradas")
+        clear_folders_btn.clicked.connect(self.clear_folders)
+        folders_btns_col.addWidget(browse_folder_btn)
+        folders_btns_col.addWidget(remove_folder_btn)
+        folders_btns_col.addWidget(clear_folders_btn)
+        folders_btns_col.addStretch()
+        folders_top_row.addLayout(folders_btns_col)
+        folders_vbox.addLayout(folders_top_row)
+
+        self.folder_edit = QLineEdit()
+        self.folder_edit.setPlaceholderText("Rutas de carpetas separadas por ; (o usá '＋ Agregar carpeta…')")
+        self.folder_edit.textEdited.connect(self._on_folder_edit_changed)
+        folders_vbox.addWidget(self.folder_edit)
+
+        folder_holder = QWidget()
+        folder_holder.setLayout(folders_vbox)
+        game_form.addRow("Carpetas de juegos", folder_holder)
+
+        self.auto_scan_checkbox = QCheckBox("Escanear e importar juegos de esta(s) carpeta(s) automáticamente")
         self.auto_scan_checkbox.setChecked(True if not existing else False)
         game_form.addRow("", self.auto_scan_checkbox)
+
+        self.xml_edit = QLineEdit()
+        self.xml_edit.setPlaceholderText("Opcional: archivo .xml/.dat con nombres completos y datos de las ROMs...")
+        browse_xml_btn = QPushButton("Examinar…")
+        browse_xml_btn.clicked.connect(self.pick_xml)
+        clear_xml_btn = QPushButton("✕")
+        clear_xml_btn.setToolTip("Quitar archivo XML asociado")
+        clear_xml_btn.setFixedWidth(28)
+        clear_xml_btn.clicked.connect(lambda: self.xml_edit.clear())
+        xml_row = QHBoxLayout()
+        xml_row.setContentsMargins(0, 0, 0, 0)
+        xml_row.addWidget(self.xml_edit, 1)
+        xml_row.addWidget(browse_xml_btn)
+        xml_row.addWidget(clear_xml_btn)
+        xml_holder = QWidget()
+        xml_holder.setLayout(xml_row)
+        game_form.addRow("Archivo XML (Opcional)", xml_holder)
+
+        xml_hint = QLabel(
+            "<i>Asociá un archivo XML (MAME, HyperSpin, Arcade, Gamelist o DAT) cuando las ROMs "
+            "solo tengan una denominación corta (ej: sf2.zip). El XML le asignará el nombre completo "
+            "y todas sus propiedades (año, fabricante, género, jugadores, etc.).</i>"
+        )
+        xml_hint.setStyleSheet("color: #aab1c0; font-size: 8.5pt;")
+        xml_hint.setWordWrap(True)
+        game_form.addRow("", xml_hint)
 
         self.emulator_combo = QComboBox()
         self.emulator_combo.addItem("Sin emulador predeterminado", None)
@@ -245,7 +309,9 @@ class ListDialog(QDialog):
             self.name_edit.setText(existing["name"])
             self.platform_edit.setText(existing["platform"] or "")
             self.extensions_edit.setText(existing["allowed_extensions"] or "")
-            self.folder_edit.setText(existing["roms_path"] or "" if "roms_path" in existing.keys() else "")
+            self._set_rom_folders(existing["roms_path"] or "" if "roms_path" in existing.keys() else "")
+            if "xml_path" in existing.keys() and existing["xml_path"]:
+                self.xml_edit.setText(existing["xml_path"])
             idx = self.emulator_combo.findData(existing["default_emulator_id"])
             if idx >= 0:
                 self.emulator_combo.setCurrentIndex(idx)
@@ -260,12 +326,17 @@ class ListDialog(QDialog):
                 self.media_root_edit.setText(existing["media_path"])
             if "boxart_path" in existing.keys() and existing["boxart_path"]:
                 self._media_values["boxart"] = existing["boxart_path"]
+                self._media_values["flyer"] = existing["boxart_path"]
             if "wheel_path" in existing.keys() and existing["wheel_path"]:
                 self._media_values["wheel"] = existing["wheel_path"]
             if "video_path" in existing.keys() and existing["video_path"]:
                 self._media_values["video"] = existing["video_path"]
             if "cartart_path" in existing.keys() and existing["cartart_path"]:
                 self._media_values["cartart"] = existing["cartart_path"]
+            if "cabinet_path" in existing.keys() and existing["cabinet_path"]:
+                self._media_values["cabinet"] = existing["cabinet_path"]
+            if "marquee_path" in existing.keys() and existing["marquee_path"]:
+                self._media_values["marquee"] = existing["marquee_path"]
         else:
             self.type_combo.setCurrentIndex(0)
 
@@ -413,8 +484,61 @@ class ListDialog(QDialog):
     def cartart_edit(self):
         return self.media_edits.get("cartart")
 
+    def _set_rom_folders(self, folders_raw):
+        """Establece las carpetas de ROMs en el listado visual y en el campo de texto."""
+        folders = parse_rom_folders(folders_raw)
+        self._sync_folders_list_from_list(folders)
+        self.folder_edit.blockSignals(True)
+        self.folder_edit.setText(format_rom_folders(folders))
+        self.folder_edit.blockSignals(False)
+
+    def _sync_folders_list_from_list(self, folders: list[str]):
+        """Actualiza el QListWidget con la lista de carpetas de ROMs."""
+        self.folders_list.clear()
+        for f in folders:
+            item = QListWidgetItem(f"📁  {f}")
+            item.setData(Qt.UserRole, f)
+            self.folders_list.addItem(item)
+
+    def _on_folder_edit_changed(self, text: str):
+        """Sincroniza el QListWidget cuando el usuario edita manualmente las rutas separadas por ';'."""
+        folders = parse_rom_folders(text)
+        self._sync_folders_list_from_list(folders)
+
+    def get_rom_folders(self) -> list[str]:
+        """Retorna la lista de carpetas de ROMs configuradas."""
+        if hasattr(self, "folders_list") and self.folders_list.count() > 0:
+            res = []
+            for i in range(self.folders_list.count()):
+                f = self.folders_list.item(i).data(Qt.UserRole)
+                if f and f not in res:
+                    res.append(f)
+            return res
+        return parse_rom_folders(self.folder_edit.text().strip())
+
+    def _get_primary_rom_folder(self) -> str:
+        """Retorna la primera carpeta de ROMs configurada (para directorio inicial en diálogos)."""
+        folders = self.get_rom_folders()
+        return folders[0] if folders else ""
+
+    def remove_selected_folder(self):
+        """Quita la carpeta seleccionada de la lista."""
+        row = self.folders_list.currentRow()
+        if row < 0 and self.folders_list.count() > 0:
+            row = self.folders_list.count() - 1
+        if row >= 0:
+            self.folders_list.takeItem(row)
+            folders = [self.folders_list.item(i).data(Qt.UserRole) for i in range(self.folders_list.count())]
+            self.folder_edit.blockSignals(True)
+            self.folder_edit.setText(format_rom_folders(folders))
+            self.folder_edit.blockSignals(False)
+
+    def clear_folders(self):
+        """Limpia todas las carpetas de ROMs configuradas."""
+        self._set_rom_folders([])
+
     def _pick_media_folder(self, target_edit, dialog_title):
-        current = target_edit.text().strip() or self.media_root_edit.text().strip() or self.folder_edit.text().strip()
+        current = target_edit.text().strip() or self.media_root_edit.text().strip() or self._get_primary_rom_folder()
         folder = QFileDialog.getExistingDirectory(self, dialog_title, current or "")
         if folder:
             target_edit.setText(folder)
@@ -423,7 +547,7 @@ class ListDialog(QDialog):
                     self._media_values[k] = folder
 
     def pick_media_root(self):
-        current = self.media_root_edit.text().strip() or self.folder_edit.text().strip()
+        current = self.media_root_edit.text().strip() or self._get_primary_rom_folder()
         folder = QFileDialog.getExistingDirectory(
             self,
             "Seleccionar carpeta principal de Medios (Media)",
@@ -434,14 +558,14 @@ class ListDialog(QDialog):
             self.auto_detect_media(silent=False)
 
     def auto_detect_media(self, silent=False):
-        base_folder = self.folder_edit.text().strip()
+        base_folder = self._get_primary_rom_folder()
         media_root = self.media_root_edit.text().strip()
         if not base_folder and not media_root:
             if not silent:
                 QMessageBox.information(
                     self,
                     "Carpeta requerida",
-                    "Seleccioná primero la carpeta de juegos o la de Medios para auto-detectar."
+                    "Seleccioná primero una carpeta de juegos o la de Medios para auto-detectar."
                 )
             return
 
@@ -466,15 +590,31 @@ class ListDialog(QDialog):
                 QMessageBox.information(self, "Búsqueda finalizada", "No se encontraron subcarpetas para los medios requeridos en el directorio.")
 
     def pick_folder(self):
-        current = self.folder_edit.text().strip()
+        current_folders = self.get_rom_folders()
+        initial_dir = current_folders[-1] if current_folders else ""
+        if initial_dir and Path(initial_dir).parent.is_dir():
+            initial_dir = str(Path(initial_dir).parent)
         folder = QFileDialog.getExistingDirectory(
             self,
-            "Seleccionar carpeta de juegos (ROMs)",
-            current or ""
+            "Agregar carpeta de juegos (ROMs)",
+            initial_dir or ""
         )
         if folder:
-            self.folder_edit.setText(folder)
+            current_folders.append(folder)
+            self._set_rom_folders(current_folders)
             self.auto_scan_checkbox.setChecked(True)
+
+    def pick_xml(self):
+        current_xml = self.xml_edit.text().strip()
+        initial_dir = str(Path(current_xml).parent) if (current_xml and Path(current_xml).parent.is_dir()) else self._get_primary_rom_folder()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Seleccionar archivo XML de nombres y datos de ROMs",
+            initial_dir or "",
+            "Archivos XML / DAT (*.xml *.dat);;Todos los archivos (*.*)"
+        )
+        if path:
+            self.xml_edit.setText(path)
 
     def _on_preset_selected(self, index):
         title = self.preset_combo.currentText()
@@ -520,16 +660,39 @@ class ListDialog(QDialog):
             self.extensions_edit.setFocus()
             return
 
-        # Validar carpeta de juegos si fue especificada
-        folder = self.folder_edit.text().strip()
-        if folder and not Path(folder).is_dir():
-            QMessageBox.warning(
-                self,
-                "Carpeta no encontrada",
-                f"La carpeta especificada no existe o no es accesible:\n{folder}\n\nPor favor seleccioná una carpeta válida."
-            )
-            self.folder_edit.setFocus()
-            return
+        # Validar carpetas de juegos si fueron especificadas
+        folders = self.get_rom_folders()
+        for f in folders:
+            if not Path(f).is_dir():
+                QMessageBox.warning(
+                    self,
+                    "Carpeta no encontrada",
+                    f"La carpeta especificada no existe o no es accesible:\n{f}\n\nPor favor seleccioná carpetas válidas."
+                )
+                self.folder_edit.setFocus()
+                return
+
+        # Validar archivo XML si fue especificado
+        xml_path = self.xml_edit.text().strip() if hasattr(self, "xml_edit") else ""
+        if xml_path:
+            if not Path(xml_path).is_file():
+                QMessageBox.warning(
+                    self,
+                    "Archivo XML no encontrado",
+                    f"El archivo XML especificado no existe o no es accesible:\n{xml_path}\n\nPor favor seleccioná un archivo XML válido."
+                )
+                self.xml_edit.setFocus()
+                return
+            try:
+                parse_rom_xml(xml_path)
+            except Exception as xml_err:
+                QMessageBox.warning(
+                    self,
+                    "Error al leer el archivo XML",
+                    f"No se pudo interpretar el archivo XML seleccionado:\n\n{xml_err}"
+                )
+                self.xml_edit.setFocus()
+                return
 
         # Si hay advertencias (ejemplo: extensión genérica .bin)
         if warnings:
@@ -561,10 +724,14 @@ class ListDialog(QDialog):
             self._media_values[k] = ed.text().strip()
 
         media_path = self.media_root_edit.text().strip()
-        boxart_path = self._media_values.get("boxart", "")
+        boxart_path = self._media_values.get("boxart") or self._media_values.get("flyer") or ""
         wheel_path = self._media_values.get("wheel", "")
         video_path = self._media_values.get("video", "")
         cartart_path = self._media_values.get("cartart", "")
+        cabinet_path = self._media_values.get("cabinet", "")
+        marquee_path = self._media_values.get("marquee", "")
+        xml_path = self.xml_edit.text().strip() if (list_type == "games" and hasattr(self, "xml_edit")) else ""
+        roms_path_val = format_rom_folders(self.get_rom_folders()) if list_type == "games" else ""
 
         return (
             self.name_edit.text().strip(),
@@ -572,7 +739,7 @@ class ListDialog(QDialog):
             self.emulator_combo.currentData() if list_type == "games" else None,
             self.layout_combo.currentText(),
             self.normalized_exts if list_type == "games" else "",
-            self.folder_edit.text().strip() if list_type == "games" else "",
+            roms_path_val,
             self.auto_scan_checkbox.isChecked() if list_type == "games" else False,
             media_path,
             boxart_path,
@@ -581,6 +748,9 @@ class ListDialog(QDialog):
             cartart_path,
             list_type,
             selected_ids,
+            cabinet_path,
+            marquee_path,
+            xml_path,
         )
 
 
@@ -750,7 +920,7 @@ class EmulatorManagerWidget(QWidget):
         layout.addLayout(btn_row)
 
     def refresh(self):
-        rows = self.db.all("SELECT * FROM emulators ORDER BY name COLLATE NOCASE")
+        rows = self.db.get_emulators()
         self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             name_item = QTableWidgetItem(row["name"])
@@ -771,10 +941,7 @@ class EmulatorManagerWidget(QWidget):
         if dialog.exec():
             name, exe, args, plat = dialog.values()
             try:
-                self.db.execute(
-                    "INSERT INTO emulators(name, executable, arguments, platform) VALUES(?,?,?,?)",
-                    (name, exe, args, plat)
-                )
+                self.db.add_emulator(name=name, executable=exe, arguments=args, platform=plat)
                 self.refresh()
                 self.emulators_changed.emit()
             except Exception as e:
@@ -785,16 +952,19 @@ class EmulatorManagerWidget(QWidget):
         if not emu_id:
             QMessageBox.information(self, "Seleccionar", "Seleccioná un emulador de la lista para editar.")
             return
-        row = self.db.one("SELECT * FROM emulators WHERE id=?", (emu_id,))
+        row = self.db.get_emulator(emu_id)
         if not row:
             return
         dialog = EmulatorDialog(self, existing=row)
         if dialog.exec():
             name, exe, args, plat = dialog.values()
             try:
-                self.db.execute(
-                    "UPDATE emulators SET name=?, executable=?, arguments=?, platform=? WHERE id=?",
-                    (name, exe, args, plat, emu_id)
+                self.db.update_emulator(
+                    emu_id,
+                    name=name,
+                    executable=exe,
+                    arguments=args,
+                    platform=plat,
                 )
                 self.refresh()
                 self.emulators_changed.emit()
@@ -806,13 +976,13 @@ class EmulatorManagerWidget(QWidget):
         if not emu_id:
             QMessageBox.information(self, "Seleccionar", "Seleccioná un emulador de la lista para eliminar.")
             return
-        row = self.db.one("SELECT name FROM emulators WHERE id=?", (emu_id,))
+        row = self.db.get_emulator(emu_id)
         if not row:
             return
 
         # Consultar cuántas listas o juegos usan este emulador
-        lists_count = self.db.one("SELECT COUNT(*) AS c FROM game_lists WHERE default_emulator_id=?", (emu_id,))["c"]
-        games_count = self.db.one("SELECT COUNT(*) AS c FROM games WHERE emulator_override_id=?", (emu_id,))["c"]
+        lists_count = self.db.count_lists_using_emulator(emu_id)
+        games_count = self.db.count_games_using_emulator(emu_id)
 
         warning = f"¿Estás seguro de que deseas eliminar el emulador '{row['name']}'?"
         if lists_count > 0 or games_count > 0:
@@ -821,7 +991,7 @@ class EmulatorManagerWidget(QWidget):
         answer = QMessageBox.question(self, "Confirmar eliminación", warning, QMessageBox.Yes | QMessageBox.No)
         if answer == QMessageBox.Yes:
             try:
-                self.db.execute("DELETE FROM emulators WHERE id=?", (emu_id,))
+                self.db.delete_emulator(emu_id)
                 self.refresh()
                 self.emulators_changed.emit()
             except Exception as e:
@@ -851,7 +1021,7 @@ class EmulatorManagerDialog(QDialog):
 
 
 class ScanSummaryDialog(QDialog):
-    """Diálogo informativo con el resumen completo del escaneo de carpeta."""
+    """Diálogo informativo con el resumen completo del escaneo de carpeta(s)."""
     def __init__(self, parent, stats: dict, folder: str, list_name: str, allowed_exts: str):
         super().__init__(parent)
         self.setWindowTitle("Resumen de escaneo de juegos")
@@ -862,13 +1032,26 @@ class ScanSummaryDialog(QDialog):
         title = QLabel(f"<h2>Escaneo completado para: {list_name}</h2>")
         layout.addWidget(title)
 
+        folders_parsed = parse_rom_folders(folder)
+        folders_label_title = "Carpetas examinadas:" if len(folders_parsed) > 1 else "Carpeta examinada:"
+        folders_display = "<br>".join(f"• {f}" for f in folders_parsed) if len(folders_parsed) > 1 else (folders_parsed[0] if folders_parsed else folder)
+
         box = QGroupBox("Detalles de la importación")
         form = QFormLayout(box)
-        form.addRow("Carpeta examinada:", QLabel(folder))
+        lbl_folders = QLabel(folders_display)
+        lbl_folders.setWordWrap(True)
+        form.addRow(folders_label_title, lbl_folders)
         form.addRow("Extensiones permitidas:", QLabel(allowed_exts))
         form.addRow("Archivos coincidentes encontrados:", QLabel(f"<b>{stats['total_found']}</b>"))
         form.addRow("Juegos nuevos agregados:", QLabel(f"<b style='color: #4cd964;'>{stats['added']}</b>"))
         form.addRow("Archivos omitidos (ya existentes):", QLabel(f"<b>{stats['skipped']}</b>"))
+        if stats.get("xml_total_entries", 0) > 0 or stats.get("xml_matched", 0) > 0:
+            xml_matched = stats.get("xml_matched", 0)
+            xml_total = stats.get("xml_total_entries", 0)
+            form.addRow(
+                "Asociados con XML (nombre y propiedades):",
+                QLabel(f"<b style='color: #a5b4fc;'>{xml_matched}</b> <span style='color: #8a93a8;'>(de {xml_total} en XML)</span>")
+            )
         layout.addWidget(box)
 
         btn = QPushButton("Aceptar")
@@ -884,14 +1067,19 @@ class GameEditDialog(QDialog):
         self.game = dict(game) if hasattr(game, "keys") else game
         game = self.game
         self.setWindowTitle(f"Editar juego: {game['title']}")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(600)
         self._new_cover_path = None  # Ruta al nuevo archivo de carátula seleccionado
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
         self.title_edit = QLineEdit(game["title"])
-        form.addRow("Título del juego *", self.title_edit)
+        form.addRow("Título completo *", self.title_edit)
+
+        rom_code = game.get("rom_name") or (Path(game["rom_path"]).stem if game.get("rom_path") else "")
+        self.rom_name_edit = QLineEdit(rom_code)
+        self.rom_name_edit.setPlaceholderText("Denominación corta de la ROM (ej: sf2)")
+        form.addRow("Denominación ROM", self.rom_name_edit)
 
         self.path_edit = QLineEdit(game["rom_path"])
         browse_btn = QPushButton("Examinar…")
@@ -902,6 +1090,53 @@ class GameEditDialog(QDialog):
         path_holder = QWidget()
         path_holder.setLayout(path_box)
         form.addRow("Ruta del archivo", path_holder)
+
+        # Propiedades del juego (provenientes del XML o editables manualmente)
+        meta_group = QGroupBox("Propiedades del Juego (XML / Metadatos)")
+        meta_form = QFormLayout(meta_group)
+
+        row_ym = QHBoxLayout()
+        self.year_edit = QLineEdit(game.get("year") or "")
+        self.year_edit.setPlaceholderText("Ej: 1991")
+        self.year_edit.setFixedWidth(100)
+        self.manufacturer_edit = QLineEdit(game.get("manufacturer") or "")
+        self.manufacturer_edit.setPlaceholderText("Ej: Capcom, Konami, Sega...")
+        row_ym.addWidget(self.year_edit)
+        row_ym.addWidget(QLabel("Fabricante:"))
+        row_ym.addWidget(self.manufacturer_edit, 1)
+        ym_widget = QWidget()
+        ym_widget.setLayout(row_ym)
+        meta_form.addRow("Año:", ym_widget)
+
+        row_gp = QHBoxLayout()
+        self.genre_edit = QLineEdit(game.get("genre") or "")
+        self.genre_edit.setPlaceholderText("Ej: Fighter, Shooter, Platform...")
+        self.players_edit = QLineEdit(game.get("players") or "")
+        self.players_edit.setPlaceholderText("Ej: 1-2")
+        self.players_edit.setFixedWidth(90)
+        row_gp.addWidget(self.genre_edit, 1)
+        row_gp.addWidget(QLabel("Jugadores:"))
+        row_gp.addWidget(self.players_edit)
+        gp_widget = QWidget()
+        gp_widget.setLayout(row_gp)
+        meta_form.addRow("Género:", gp_widget)
+
+        row_cr = QHBoxLayout()
+        self.cloneof_edit = QLineEdit(game.get("cloneof") or "")
+        self.cloneof_edit.setPlaceholderText("ROM padre (si es clon)")
+        self.rating_edit = QLineEdit(game.get("rating") or "")
+        self.rating_edit.setPlaceholderText("Clasificación / Rating")
+        self.crc_edit = QLineEdit(game.get("crc") or "")
+        self.crc_edit.setPlaceholderText("CRC")
+        self.crc_edit.setFixedWidth(95)
+        row_cr.addWidget(self.cloneof_edit, 1)
+        row_cr.addWidget(QLabel("Rating:"))
+        row_cr.addWidget(self.rating_edit, 1)
+        row_cr.addWidget(QLabel("CRC:"))
+        row_cr.addWidget(self.crc_edit)
+        cr_widget = QWidget()
+        cr_widget.setLayout(row_cr)
+        meta_form.addRow("Clon de:", cr_widget)
 
         # Carátula / portada del juego
         self.cover_edit = QLineEdit(game.get("cover_path") or "")
@@ -931,7 +1166,7 @@ class GameEditDialog(QDialog):
 
         self.override_combo = QComboBox()
         self.override_combo.addItem("Heredar emulador de la lista (por defecto)", None)
-        emulators = self.db.all("SELECT * FROM emulators ORDER BY name COLLATE NOCASE")
+        emulators = self.db.get_emulators()
         for emu in emulators:
             self.override_combo.addItem(f"{emu['name']} ({emu['executable']})", emu["id"])
         idx = self.override_combo.findData(game["emulator_override_id"])
@@ -944,10 +1179,11 @@ class GameEditDialog(QDialog):
         form.addRow("Argumentos propios", self.args_edit)
 
         self.notes_edit = QTextEdit(game["notes"] or "")
-        self.notes_edit.setMaximumHeight(80)
-        form.addRow("Notas", self.notes_edit)
+        self.notes_edit.setMaximumHeight(70)
+        form.addRow("Notas / Sinopsis", self.notes_edit)
 
         layout.addLayout(form)
+        layout.addWidget(meta_group)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.save)
@@ -975,15 +1211,49 @@ class GameEditDialog(QDialog):
         self.cover_edit.setText("")
 
     def save(self):
+        import json
         title = self.title_edit.text().strip()
         path = self.path_edit.text().strip()
         if not title or not path:
             QMessageBox.warning(self, "Campos requeridos", "El título y la ruta del archivo son obligatorios.")
             return
 
+        rom_name = self.rom_name_edit.text().strip() or Path(path).stem
+        year = self.year_edit.text().strip()
+        manufacturer = self.manufacturer_edit.text().strip()
+        genre = self.genre_edit.text().strip()
+        players = self.players_edit.text().strip()
+        cloneof = self.cloneof_edit.text().strip()
+        rating = self.rating_edit.text().strip()
+        crc = self.crc_edit.text().strip()
+
         emu_override = self.override_combo.currentData()
         args = self.args_edit.text().strip()
         notes = self.notes_edit.toPlainText().strip()
+
+        # Actualizar xml_metadata preservando propiedades adicionales existentes
+        raw_meta = self.game.get("xml_metadata") or "{}"
+        try:
+            meta_dict = json.loads(raw_meta) if isinstance(raw_meta, str) else dict(raw_meta)
+            if not isinstance(meta_dict, dict):
+                meta_dict = {}
+        except Exception:
+            meta_dict = {}
+
+        meta_dict["title"] = title
+        meta_dict["rom_name"] = rom_name
+        for k, v in (
+            ("year", year),
+            ("manufacturer", manufacturer),
+            ("genre", genre),
+            ("players", players),
+            ("cloneof", cloneof),
+            ("rating", rating),
+            ("crc", crc),
+        ):
+            if v:
+                meta_dict[k] = v
+        xml_metadata = json.dumps(meta_dict, ensure_ascii=False)
 
         # Determinar la ruta final de la carátula
         cover_path = self.game.get("cover_path") or ""
@@ -1008,10 +1278,23 @@ class GameEditDialog(QDialog):
                         )
 
         try:
-            self.db.execute(
-                """UPDATE games SET title=?, rom_path=?, emulator_override_id=?, launch_arguments=?, notes=?, cover_path=?
-                   WHERE id=?""",
-                (title, path, emu_override, args, notes, cover_path, self.game["id"])
+            self.db.update_game(
+                self.game["id"],
+                title=title,
+                rom_path=path,
+                rom_name=rom_name,
+                year=year,
+                manufacturer=manufacturer,
+                genre=genre,
+                players=players,
+                cloneof=cloneof,
+                rating=rating,
+                crc=crc,
+                xml_metadata=xml_metadata,
+                emulator_override_id=emu_override,
+                launch_arguments=args,
+                notes=notes,
+                cover_path=cover_path,
             )
             self.accept()
         except Exception as e:

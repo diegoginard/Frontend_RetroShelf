@@ -1,0 +1,19 @@
+# Configuración del Sistema RetroShelf (Texto Plano)
+control_close_emulator = Escape
+control_mute_video = M
+control_nav_down = Down
+control_nav_up = Up
+control_page_down = PageDown
+control_page_up = PageUp
+control_select_game = Return
+emulator_gamepad_exit = true
+emulator_global_exit = true
+emulator_mute_video = true
+target_screen = 0
+video_custom_height = 1080
+video_custom_width = 1920
+video_driver = vulkan
+video_mode = borderless
+video_monitor = 0
+video_resolution = native
+video_ui_scale = 100% (Normal)

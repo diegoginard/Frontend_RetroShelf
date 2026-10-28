@@ -1,3 +1,4 @@
+import retroshelf
 """
 =============================================================================
 Layout Autónomo y Configuración: Nintendo 64 (N64)
@@ -443,6 +444,17 @@ class ThemeLayout(BaseLayout):
         if self._player_initialized:
             return
         self._player_initialized = True
+        self._want_video_playing = False
+        self._pending_video_path = None
+        self._video_debounce_timer = QTimer(self)
+        self._video_debounce_timer.setSingleShot(True)
+        self._video_debounce_timer.setInterval(160)
+        self._video_debounce_timer.timeout.connect(self._play_debounced_video)
+
+        self._video_watchdog_timer = QTimer(self)
+        self._video_watchdog_timer.setSingleShot(True)
+        self._video_watchdog_timer.setInterval(1200)
+        self._video_watchdog_timer.timeout.connect(self._on_video_watchdog)
 
         self.player = QMediaPlayer(self)
         self.player.setLoops(QMediaPlayer.Infinite)
@@ -454,19 +466,55 @@ class ThemeLayout(BaseLayout):
         self.player.setVideoSink(self.video_sink)
         self.video_sink.videoFrameChanged.connect(self._on_video_frame_changed)
         self.player.mediaStatusChanged.connect(self._on_media_status_changed)
+        self.player.errorOccurred.connect(self._on_player_error)
 
     def _on_video_frame_changed(self, frame):
-        if frame.isValid():
+        if frame.isValid() and getattr(self, "_want_video_playing", True) and self.player:
+            p_path = getattr(self, "_pending_video_path", None)
+            if p_path and self.player.source() != QUrl.fromLocalFile(p_path):
+                return
             img = frame.toImage()
             if not img.isNull():
                 self._current_video_image = img
                 self.update()
 
     def _on_media_status_changed(self, status):
-        if status == QMediaPlayer.EndOfMedia:
-            if self.player:
+        if not self.player:
+            return
+        if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
+            if getattr(self, "_want_video_playing", False):
+                if self.audio_output:
+                    self.audio_output.setVolume(0.0 if self._media_muted else 0.8)
+                if self.player.playbackState() != QMediaPlayer.PlayingState:
+                    self.player.play()
+            else:
+                if self.audio_output:
+                    self.audio_output.setVolume(0.0)
+                if status == QMediaPlayer.BufferedMedia:
+                    self.player.pause()
+        elif status == QMediaPlayer.EndOfMedia:
+            if getattr(self, "_want_video_playing", False):
                 self.player.setPosition(0)
                 self.player.play()
+
+    def _on_player_error(self, error, error_string=""):
+        self._current_video_image = None
+
+    def _on_video_watchdog(self):
+        if not getattr(self, "_want_video_playing", False) or not getattr(self, "_pending_video_path", None):
+            return
+        if not os.path.isfile(self._pending_video_path) or not self.player:
+            return
+        if self.player.mediaStatus() == QMediaPlayer.LoadingMedia:
+            return
+        if self._current_video_image is None or self.player.playbackState() != QMediaPlayer.PlayingState:
+            try:
+                src_url = QUrl.fromLocalFile(self._pending_video_path)
+                if self.player.source() != src_url:
+                    self.player.setSource(src_url)
+                self.player.play()
+            except Exception:
+                pass
 
     def set_db(self, db):
         self.db = db
@@ -542,13 +590,17 @@ class ThemeLayout(BaseLayout):
             self.game_selected.emit(gid)
 
         self.current_media = resolve_game_media(game)
+        if not hasattr(self, "_art_pix_cache"):
+            self._art_pix_cache = {}
         box_file = self.current_media.get("boxart")
         if not box_file and game.get("cover_path"):
             box_file = game["cover_path"]
-        self._current_box_pixmap = QPixmap(box_file) if box_file and os.path.isfile(box_file) else None
+        self._pending_box_file = box_file
+        self._current_box_pixmap = self._art_pix_cache.get(box_file) if box_file else None
 
         cart_file = self.current_media.get("cartart")
-        self._current_cart_pixmap = QPixmap(cart_file) if cart_file and os.path.isfile(cart_file) else None
+        self._pending_cart_file = cart_file
+        self._current_cart_pixmap = self._art_pix_cache.get(cart_file) if cart_file else None
 
         self._start_cart_animation()
         self._start_boxart_animation()
@@ -561,16 +613,66 @@ class ThemeLayout(BaseLayout):
             video_to_play = self._static_video_path
 
         self._ensure_player_initialized()
-        if video_to_play:
-            source_url = QUrl.fromLocalFile(video_to_play)
-            if self.player.source() != source_url:
-                self.player.setSource(source_url)
-                self.player.play()
-            elif self.player.playbackState() != QMediaPlayer.PlayingState:
-                self.player.play()
+        self._pending_video_path = video_to_play
+        self._want_video_playing = False
+        self._video_watchdog_timer.stop()
+        if self.audio_output:
+            self.audio_output.setVolume(0.0)
+        if self.player and self.player.mediaStatus() == QMediaPlayer.BufferedMedia:
+            try:
+                self.player.pause()
+            except Exception:
+                pass
+        self._current_video_image = None
+        self._video_debounce_timer.start()
+
+    def _load_pending_art(self):
+        if not hasattr(self, "_art_pix_cache"):
+            self._art_pix_cache = {}
+        if len(self._art_pix_cache) > 80:
+            self._art_pix_cache.clear()
+        b_file = getattr(self, "_pending_box_file", None)
+        if b_file:
+            if b_file not in self._art_pix_cache:
+                p = QPixmap(b_file) if os.path.isfile(b_file) else QPixmap()
+                self._art_pix_cache[b_file] = p if not p.isNull() else None
+            self._current_box_pixmap = self._art_pix_cache[b_file]
         else:
-            self.player.stop()
+            self._current_box_pixmap = None
+
+        c_file = getattr(self, "_pending_cart_file", None)
+        if c_file:
+            if c_file not in self._art_pix_cache:
+                p = QPixmap(c_file) if os.path.isfile(c_file) else QPixmap()
+                self._art_pix_cache[c_file] = p if not p.isNull() else None
+            self._current_cart_pixmap = self._art_pix_cache[c_file]
+        else:
+            self._current_cart_pixmap = None
+
+    def _play_debounced_video(self):
+        self._load_pending_art()
+        self.update()
+        video_to_play = getattr(self, "_pending_video_path", None)
+        if video_to_play and os.path.isfile(video_to_play):
+            self._want_video_playing = True
+            if self.audio_output:
+                self.audio_output.setVolume(0.0 if self._media_muted else 0.8)
+            source_url = QUrl.fromLocalFile(video_to_play)
+            try:
+                if self.player.source() == source_url:
+                    self.player.setPosition(0)
+                else:
+                    self.player.setSource(source_url)
+                self.player.play()
+                self._video_watchdog_timer.start()
+            except Exception:
+                pass
+        else:
+            self._want_video_playing = False
+            if self.audio_output:
+                self.audio_output.setVolume(0.0)
             self._current_video_image = None
+            self.update()
 
     def _get_game_wheel_pixmap(self, game: dict) -> QPixmap | None:
         gid = game.get("id")

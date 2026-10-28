@@ -1,6 +1,6 @@
 # RetroShelf — Frontend de Emulación para Windows
 
-Frontend modular, rápido y elegante para organizar, visualizar y ejecutar videojuegos retro mediante emuladores en Windows 10 y Windows 11. Desarrollado con **Python 3.11+**, **PySide6** y **SQLite**.
+Frontend modular, rápido y elegante para organizar, visualizar y ejecutar videojuegos retro mediante emuladores en Windows 10 y Windows 11. Desarrollado con **Python 3.11+**, **PySide6** y almacenamiento local en **Texto Plano (`.txt`)**.
 
 ---
 
@@ -85,7 +85,7 @@ RetroShelf cuenta con un motor desacoplado de layouts (`retroshelf/ui/layouts/`)
 - **Wheel (Rueda Clásica):** Rueda arcade interactiva con logos transparentes (`wheel`) y video snaps.
 - **Banners (Tarjetas Horizontales):** Filas amplias estilo LaunchBox / Steam con resumen visual y detalles técnicos.
 - **Detalles (Tabla Técnica):** Vista completa y ordenable por columnas (Título, Archivo, Formato, Tamaño, Emulador efectivo).
-- **Personalización por Lista:** Cada lista recuerda de forma independiente su layout preferido en SQLite (`game_lists.layout`).
+- **Personalización por Lista:** Cada lista recuerda de forma independiente su layout preferido en su archivo `.txt` dentro de `lists/`.
 
 ### 6. Configuración de Video y Resoluciones
 Desde el botón **🖥 Configuración de video** en la barra de herramientas del Configurador podés definir cómo se visualizará el Frontend:
@@ -109,14 +109,17 @@ RetroShelf/
 ├── run.bat                   # Menú selector interactivo
 ├── configurador.bat          # Lanzador directo del Modo Configurador
 ├── jugar.bat                 # Lanzador directo del Modo Frontend / Jugador
+├── config/                   # Configuración general en texto plano (settings.txt)
+├── emulators/                # Archivos .txt individuales por cada emulador
+├── lists/                    # Archivos .txt individuales por cada lista/menú y sus juegos
 └── retroshelf/
     ├── __init__.py
     ├── __main__.py           # Enrutador principal (--player o configurador)
-    ├── db.py                 # Capa de base de datos SQLite y migraciones
+    ├── db.py                 # Motor de almacenamiento en memoria y archivos de texto plano (.txt)
     ├── services/
     │   ├── __init__.py
     │   ├── launcher.py       # Resolución de prioridades y ejecución de emuladores
-    │   └── library.py        # Normalización de extensiones y escaneo de ROMs
+    │   └── library.py        # Normalización de extensiones, XML y escaneo de ROMs
     └── ui/
         ├── __init__.py
         ├── dialogs.py        # Diálogos: Listas, Emuladores, Resumen de Escaneo, Edición
@@ -135,9 +138,10 @@ RetroShelf/
 
 ---
 
-## 💾 Persistencia de datos
+## 💾 Persistencia de datos en Texto Plano (100% Portable)
 
-La base de datos SQLite se almacena en:
-`%APPDATA%\RetroShelf\data\retroshelf.db`
+RetroShelf guarda toda su información en archivos de texto plano (`.txt`) directamente dentro de la carpeta del proyecto (sin utilizar `AppData` ni bases de datos binarias):
 
-La aplicación incluye un sistema de migración que actualiza el esquema automáticamente preservando todas las listas y juegos creados con anterioridad.
+- **`config/settings.txt`**: Ajustes generales del sistema y controles.
+- **`emulators/<NombreEmulador>.txt`**: Un archivo `.txt` independiente por cada emulador registrado.
+- **`lists/<NombreLista>.txt`**: Un archivo `.txt` independiente por cada lista o menú, con su configuración (`[List]`) y su catálogo de juegos (`[Games]`).

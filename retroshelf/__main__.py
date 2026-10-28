@@ -8,6 +8,7 @@ if str(root_dir) not in sys.path:
 
 def main():
     import os
+    import retroshelf  # Asegura configuración de FFmpeg/QtMultimedia antes de crear reproductores
     try:
         from retroshelf.db import Database
         db = Database()

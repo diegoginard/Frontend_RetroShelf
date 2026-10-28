@@ -1,0 +1,7 @@
+# Configuración de Emulador: Retroarch Paprium
+id = 6
+name = Retroarch Paprium
+executable = C:/Attract/Emu/RetroArch/retroarch.exe
+arguments = -f -L "C:\Attract\Emu\RetroArch\cores\paprium_genplusgx_libretro.dll" "{rom}"
+platform = 
+created_at = 2026-10-26 02:55:46
