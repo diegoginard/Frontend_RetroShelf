@@ -24,7 +24,7 @@ from retroshelf.services.media import resolve_game_media
 from retroshelf.ui.cover_utils import load_cover
 from retroshelf.services.controls import (
     matches_action, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_PAGE_UP,
-    ACTION_PAGE_DOWN, ACTION_SELECT, ACTION_MUTE
+    ACTION_PAGE_DOWN, ACTION_SELECT, ACTION_MUTE, ACTION_NAV_BACK
 )
 
 LAYOUT_DIR = Path(__file__).resolve().parent
@@ -991,6 +991,9 @@ class ThemeLayout(BaseLayout):
             if gid:
                 self._play_select_sound()
                 self.game_activated.emit(gid)
+            event.accept()
+        elif matches_action(event, ACTION_NAV_BACK):
+            self.nav_back_requested.emit()
             event.accept()
         elif matches_action(event, ACTION_MUTE) or key == Qt.Key_M:
             self.set_muted(not self.is_muted())

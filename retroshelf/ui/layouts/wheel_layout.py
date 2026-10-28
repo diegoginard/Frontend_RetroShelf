@@ -14,7 +14,7 @@ from retroshelf.ui.layouts.base import BaseLayout
 from retroshelf.services.media import resolve_game_media
 from retroshelf.ui.cover_utils import load_cover
 from retroshelf.services.controls import (
-    matches_action, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_SELECT, ACTION_MUTE
+    matches_action, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_SELECT, ACTION_MUTE, ACTION_NAV_BACK
 )
 
 
@@ -555,6 +555,10 @@ class WheelLayout(BaseLayout):
         elif matches_action(event, ACTION_NAV_DOWN, getattr(self, "db", None)):
             row = min(self.wheel_list.count() - 1, self.wheel_list.currentRow() + 1)
             self.wheel_list.setCurrentRow(row)
+            event.accept()
+            return
+        elif matches_action(event, ACTION_NAV_BACK, getattr(self, "db", None)):
+            self.nav_back_requested.emit()
             event.accept()
             return
         elif matches_action(event, ACTION_MUTE, getattr(self, "db", None)):

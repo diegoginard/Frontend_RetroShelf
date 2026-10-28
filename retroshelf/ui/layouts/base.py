@@ -7,10 +7,11 @@ class BaseLayout(QWidget):
     Clase base abstracta para todos los layouts personalizados de RetroShelf.
     Cualquier layout personalizado debe heredar de esta clase e implementar sus métodos.
     """
-    # Señales para comunicar eventos a MainWindow
+    # Señales para comunicar eventos a MainWindow / PlayerWindow
     game_selected = Signal(int)           # Emite game_id cuando se selecciona un juego
     game_activated = Signal(int)          # Emite game_id al hacer doble clic o Enter (ejecutar)
     context_menu_requested = Signal(int, QPoint)  # Emite (game_id, posición_global)
+    nav_back_requested = Signal()         # Emite al solicitar volver atrás (Escape, Retroceso o botón B)
 
     # Identificadores del layout
     LAYOUT_NAME = "Base"

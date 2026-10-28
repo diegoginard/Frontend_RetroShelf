@@ -15,8 +15,10 @@ from PySide6.QtWidgets import (
 )
 from retroshelf.services.controls import (
     ACTIONS_INFO, get_all_bindings, set_binding, reset_default_bindings,
-    qt_key_to_name, qt_event_to_shortcut_name
+    qt_key_to_name, qt_event_to_shortcut_name,
+    get_gamepad_binding, set_gamepad_binding, reset_default_gamepad_bindings
 )
+from retroshelf.services.gamepad import poll_raw_gamepad_inputs
 
 SCREEN_MODES = [
     ("Pantalla completa exclusiva (Fullscreen)", "fullscreen"),
@@ -68,7 +70,7 @@ class KeyCaptureDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
 
-        lbl_title = QLabel("Asignando control para:")
+        lbl_title = QLabel("Asignando tecla para:")
         lbl_title.setStyleSheet("color: #9aa5b8; font-size: 10pt;")
         layout.addWidget(lbl_title)
 
@@ -98,7 +100,7 @@ class KeyCaptureDialog(QDialog):
         layout.addWidget(hint)
 
         btn_cancel = QPushButton("Cancelar")
-        btn_cancel.setFocusPolicy(Qt.NoFocus)  # Evita que el botón intercepte Space o Enter
+        btn_cancel.setFocusPolicy(Qt.NoFocus)
         btn_cancel.clicked.connect(self._safe_reject)
         layout.addWidget(btn_cancel)
 
@@ -168,7 +170,6 @@ class KeyCaptureDialog(QDialog):
             self.releaseKeyboard()
         except Exception:
             pass
-        # Un brevísimo retraso para que el usuario aprecie la confirmación visual en pantalla
         QTimer.singleShot(160, self.accept)
 
     def keyReleaseEvent(self, event: QKeyEvent):
@@ -193,6 +194,96 @@ class KeyCaptureDialog(QDialog):
             event.accept()
             return
         super().keyReleaseEvent(event)
+
+
+class GamepadCaptureDialog(QDialog):
+    """
+    Diálogo modal interactivo para capturar un botón o combinación de mando / joystick.
+    """
+    def __init__(self, action_name: str, parent=None):
+        super().__init__(parent)
+        self.action_name = action_name
+        self.captured_button_name: str | None = None
+
+        self.setWindowTitle("Asignar botón de mando / joystick")
+        self.setFixedSize(460, 240)
+        self.setModal(True)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1a1d27;
+                border: 2px solid #5d48d9;
+                border-radius: 10px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        lbl_title = QLabel("Asignando botón de mando para:")
+        lbl_title.setStyleSheet("color: #9aa5b8; font-size: 10pt;")
+        layout.addWidget(lbl_title)
+
+        lbl_action = QLabel(f"<b>{action_name}</b>")
+        lbl_action.setStyleSheet("color: #ffffff; font-size: 13pt;")
+        layout.addWidget(lbl_action)
+
+        self.key_box = QFrame()
+        self.key_box.setStyleSheet("""
+            QFrame {
+                background-color: #242938;
+                border: 2px dashed #7866ed;
+                border-radius: 8px;
+                padding: 14px;
+            }
+        """)
+        kb_layout = QVBoxLayout(self.key_box)
+        self.status_label = QLabel("Presioná un botón, cruceta o palanca en el mando...")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("color: #e2e8f0; font-size: 11pt; font-weight: bold;")
+        kb_layout.addWidget(self.status_label)
+        layout.addWidget(self.key_box)
+
+        hint = QLabel("Soporta mandos Xbox, PlayStation, 8BitDo y genéricos USB (A, B, X, Y, LB, RB, D-Pad, etc.)")
+        hint.setStyleSheet("color: #718096; font-size: 8.5pt;")
+        hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(hint)
+
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self._safe_reject)
+        layout.addWidget(btn_cancel)
+
+        # Temporizador de sondeo de mandos en tiempo real
+        self._timer = QTimer(self)
+        self._timer.setInterval(28)
+        self._timer.timeout.connect(self._poll_inputs)
+        self._timer.start()
+
+    def _poll_inputs(self):
+        inputs = poll_raw_gamepad_inputs()
+        if not inputs:
+            return
+
+        if "Back" in inputs and "Start" in inputs:
+            btn_name = "Back+Start"
+        else:
+            btn_name = next(iter(inputs))
+
+        self.captured_button_name = btn_name
+        self._timer.stop()
+        self.status_label.setText(f"✓ Botón capturado: {btn_name}")
+        self.status_label.setStyleSheet("color: #4ade80; font-size: 12pt; font-weight: bold;")
+        QTimer.singleShot(180, self.accept)
+
+    def _safe_reject(self):
+        if self._timer.isActive():
+            self._timer.stop()
+        self.reject()
+
+    def closeEvent(self, event):
+        if self._timer.isActive():
+            self._timer.stop()
+        super().closeEvent(event)
 
 
 class SystemSettingsWidget(QWidget):
@@ -236,34 +327,38 @@ class SystemSettingsWidget(QWidget):
         layout.addWidget(header_card)
 
         # -------------------------------------------------------------
-        # 1. Grupo: Controles y Asignación de Teclas
+        # 1. Grupo: Controles y Asignación de Teclas y Mandos
         # -------------------------------------------------------------
-        grp_controls = QGroupBox("🎮 Controles y Asignación de Teclas del Sistema")
+        grp_controls = QGroupBox("🎮 Controles y Asignación de Teclas y Mandos")
         v_controls = QVBoxLayout(grp_controls)
         v_controls.setSpacing(10)
 
         lbl_c_info = QLabel(
-            "Hacé clic en <b>'Cambiar Tecla'</b> en cualquier acción para asignar la tecla deseada. "
-            "Estas teclas controlan la ruleta, la selección de juegos y el cierre global de emuladores."
+            "Configurá las teclas del teclado y los botones de mandos / joysticks para cada acción. "
+            "Ambos métodos de control funcionan de manera simultánea en todo momento en RetroShelf."
         )
         lbl_c_info.setStyleSheet("color: #a0aec0; font-size: 9pt;")
         lbl_c_info.setWordWrap(True)
         v_controls.addWidget(lbl_c_info)
 
         self.controls_table = QTableWidget()
-        self.controls_table.setColumnCount(4)
-        self.controls_table.setHorizontalHeaderLabels(["Acción", "Descripción", "Tecla Actual", "Asignar"])
+        self.controls_table.setColumnCount(6)
+        self.controls_table.setHorizontalHeaderLabels([
+            "Acción", "Descripción", "Tecla Teclado", "Asignar Tecla", "Botón Mando", "Asignar Mando"
+        ])
         self.controls_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.controls_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.controls_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.controls_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.controls_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.controls_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.controls_table.setSelectionMode(QAbstractItemView.NoSelection)
         self.controls_table.verticalHeader().setVisible(False)
-        self.controls_table.setMinimumHeight(240)
+        self.controls_table.setMinimumHeight(280)
         v_controls.addWidget(self.controls_table)
 
         row_c_btns = QHBoxLayout()
-        btn_reset_keys = QPushButton("↺ Restablecer controles predeterminados")
+        btn_reset_keys = QPushButton("↺ Restablecer controles predeterminados (Teclado y Mandos)")
         btn_reset_keys.clicked.connect(self._reset_controls_defaults)
         row_c_btns.addWidget(btn_reset_keys)
         row_c_btns.addStretch(1)
@@ -380,7 +475,7 @@ class SystemSettingsWidget(QWidget):
         self.load_settings()
 
     def refresh_controls_table(self):
-        """Llena la tabla de asignación de teclas."""
+        """Llena la tabla de asignación de teclas y mandos."""
         bindings = get_all_bindings(self.db)
         self.controls_table.setRowCount(len(bindings))
 
@@ -395,17 +490,27 @@ class SystemSettingsWidget(QWidget):
             item_desc.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.controls_table.setItem(row, 1, item_desc)
 
+            # Teclado
             key_badge = QTableWidgetItem(f"  {info['key']}  ")
             key_badge.setTextAlignment(Qt.AlignCenter)
             key_badge.setFont(QFont("Segoe UI", 10, QFont.Bold))
             key_badge.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.controls_table.setItem(row, 2, key_badge)
 
-            btn_change = QPushButton("Cambiar Tecla…")
-            btn_change.setProperty("action_id", info["id"])
-            btn_change.setProperty("action_name", info["name"])
-            btn_change.clicked.connect(lambda checked=False, i=info: self._prompt_key_change(i["id"], i["name"]))
-            self.controls_table.setCellWidget(row, 3, btn_change)
+            btn_change_key = QPushButton("Cambiar Tecla…")
+            btn_change_key.clicked.connect(lambda checked=False, i=info: self._prompt_key_change(i["id"], i["name"]))
+            self.controls_table.setCellWidget(row, 3, btn_change_key)
+
+            # Mando / Joystick
+            pad_badge = QTableWidgetItem(f"  {info['pad']}  ")
+            pad_badge.setTextAlignment(Qt.AlignCenter)
+            pad_badge.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            pad_badge.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.controls_table.setItem(row, 4, pad_badge)
+
+            btn_change_pad = QPushButton("Cambiar Mando…")
+            btn_change_pad.clicked.connect(lambda checked=False, i=info: self._prompt_gamepad_change(i["id"], i["name"]))
+            self.controls_table.setCellWidget(row, 5, btn_change_pad)
 
     def _prompt_key_change(self, action_id: str, action_name: str):
         dialog = KeyCaptureDialog(action_name, self)
@@ -415,15 +520,24 @@ class SystemSettingsWidget(QWidget):
             self.refresh_controls_table()
             self.settings_saved.emit()
 
+    def _prompt_gamepad_change(self, action_id: str, action_name: str):
+        dialog = GamepadCaptureDialog(action_name, self)
+        if dialog.exec() and dialog.captured_button_name:
+            new_pad = dialog.captured_button_name
+            set_gamepad_binding(self.db, action_id, new_pad)
+            self.refresh_controls_table()
+            self.settings_saved.emit()
+
     def _reset_controls_defaults(self):
         res = QMessageBox.question(
             self,
             "Restablecer controles",
-            "¿Deseás restablecer todas las teclas y controles a sus valores predeterminados?",
+            "¿Deseás restablecer todas las teclas y botones de mandos a sus valores predeterminados?",
             QMessageBox.Yes | QMessageBox.No
         )
         if res == QMessageBox.Yes:
             reset_default_bindings(self.db)
+            reset_default_gamepad_bindings(self.db)
             self.refresh_controls_table()
             self.settings_saved.emit()
 

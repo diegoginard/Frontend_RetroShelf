@@ -10,54 +10,69 @@ from PySide6.QtCore import Qt
 ACTION_CLOSE_EMULATOR = "close_emulator"
 ACTION_NAV_UP = "nav_up"
 ACTION_NAV_DOWN = "nav_down"
+ACTION_NAV_BACK = "nav_back"
 ACTION_PAGE_UP = "page_up"
 ACTION_PAGE_DOWN = "page_down"
 ACTION_SELECT = "select_game"
 ACTION_MUTE = "mute_video"
 
-# Metadatos de cada acción (nombre para mostrar, descripción y tecla por defecto)
+# Metadatos de cada acción (nombre para mostrar, descripción, tecla por defecto y botón mando por defecto)
 ACTIONS_INFO = [
-    {
-        "id": ACTION_CLOSE_EMULATOR,
-        "name": "Cerrar emulador en ejecución",
-        "desc": "Cierra el proceso del emulador activo y restaura el frontend",
-        "default": "Escape",
-    },
     {
         "id": ACTION_NAV_UP,
         "name": "Subir (Ruleta / Lista)",
         "desc": "Sube un elemento en la ruleta de juegos o en las listas",
         "default": "Up",
+        "default_pad": "D-Pad Up",
     },
     {
         "id": ACTION_NAV_DOWN,
         "name": "Bajar (Ruleta / Lista)",
         "desc": "Baja un elemento en la ruleta de juegos o en las listas",
         "default": "Down",
+        "default_pad": "D-Pad Down",
+    },
+    {
+        "id": ACTION_SELECT,
+        "name": "Seleccionar / Entrar / Ejecutar",
+        "desc": "Ejecuta el juego o entra al sistema o lista seleccionada",
+        "default": "Return",
+        "default_pad": "A",
+    },
+    {
+        "id": ACTION_NAV_BACK,
+        "name": "Volver atrás (Menús / Listas)",
+        "desc": "Retrocede al menú anterior o lista de listas en navegación jerárquica",
+        "default": "Backspace",
+        "default_pad": "B",
     },
     {
         "id": ACTION_PAGE_UP,
         "name": "Página / Letra anterior",
         "desc": "Retrocede 5 juegos o salta a la letra anterior",
         "default": "PageUp",
+        "default_pad": "LB",
     },
     {
         "id": ACTION_PAGE_DOWN,
         "name": "Página / Letra siguiente",
         "desc": "Avanza 5 juegos o salta a la siguiente letra",
         "default": "PageDown",
+        "default_pad": "RB",
     },
     {
-        "id": ACTION_SELECT,
-        "name": "Seleccionar / Ejecutar juego",
-        "desc": "Ejecuta el juego actualmente enfocado",
-        "default": "Return",
+        "id": ACTION_CLOSE_EMULATOR,
+        "name": "Cerrar emulador en ejecución",
+        "desc": "Cierra el proceso del emulador activo y restaura el frontend",
+        "default": "Escape",
+        "default_pad": "Back+Start",
     },
     {
         "id": ACTION_MUTE,
         "name": "Silenciar / Activar audio video",
         "desc": "Alterna el sonido del video snap en el diseño visual",
         "default": "M",
+        "default_pad": "Y",
     },
 ]
 
@@ -151,9 +166,22 @@ NAME_TO_QT.setdefault("Enter", [Qt.Key_Return, Qt.Key_Enter])
 ACTION_ALIASES = {
     ACTION_NAV_UP: [Qt.Key_Up, Qt.Key_W, Qt.Key_K],
     ACTION_NAV_DOWN: [Qt.Key_Down, Qt.Key_S, Qt.Key_J],
+    ACTION_NAV_BACK: [Qt.Key_Backspace, Qt.Key_Escape],
     ACTION_PAGE_UP: [Qt.Key_PageUp, Qt.Key_Left],
     ACTION_PAGE_DOWN: [Qt.Key_PageDown, Qt.Key_Right],
     ACTION_SELECT: [Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space],
+}
+
+# Alias secundarios por defecto para mandos y joysticks
+GAMEPAD_ACTION_ALIASES = {
+    ACTION_NAV_UP: ["D-Pad Up", "L-Stick Up", "POV Up", "Axis Y-"],
+    ACTION_NAV_DOWN: ["D-Pad Down", "L-Stick Down", "POV Down", "Axis Y+"],
+    ACTION_SELECT: ["A", "Start", "Button 1"],
+    ACTION_NAV_BACK: ["B", "Back", "Button 2"],
+    ACTION_PAGE_UP: ["LB", "D-Pad Left", "L-Stick Left", "Button 5"],
+    ACTION_PAGE_DOWN: ["RB", "D-Pad Right", "L-Stick Right", "Button 6"],
+    ACTION_CLOSE_EMULATOR: ["Back+Start"],
+    ACTION_MUTE: ["Y", "Button 4"],
 }
 
 
@@ -271,23 +299,56 @@ def set_binding(db, action: str, key_name: str):
 
 
 def reset_default_bindings(db):
-    """Restablece todas las teclas a sus valores predeterminados."""
+    """Restablece todas las teclas y mandos a sus valores predeterminados."""
     if db:
         for info in ACTIONS_INFO:
             db.set_setting(f"control_{info['id']}", info["default"])
+            db.set_setting(f"gamepad_{info['id']}", info.get("default_pad", "A"))
 
 
-def get_all_bindings(db) -> list[dict]:
-    """Retorna una lista con la información completa y tecla actual de cada acción."""
+def get_gamepad_binding(db, action: str) -> str:
+    """Obtiene el botón de joystick configurado para una acción, o su valor predeterminado."""
+    default = "A"
+    for info in ACTIONS_INFO:
+        if info["id"] == action:
+            default = info.get("default_pad", "A")
+            break
+    if db is None:
+        try:
+            from retroshelf.db import Database
+            db = Database()
+        except Exception:
+            return default
+    return db.get_setting(f"gamepad_{action}", default)
+
+
+def set_gamepad_binding(db, action: str, pad_btn: str):
+    """Guarda una asignación de botón de mando en la base de datos."""
+    if db:
+        db.set_setting(f"gamepad_{action}", pad_btn.strip())
+
+
+def reset_default_gamepad_bindings(db):
+    """Restablece todos los botones de joystick a sus valores predeterminados."""
+    if db:
+        for info in ACTIONS_INFO:
+            db.set_setting(f"gamepad_{info['id']}", info.get("default_pad", "A"))
+
+
+def get_all_bindings(db=None) -> list[dict]:
+    """Retorna una lista con la información completa, tecla actual y botón de joystick de cada acción."""
     result = []
     for info in ACTIONS_INFO:
         current_key = get_binding(db, info["id"])
+        current_pad = get_gamepad_binding(db, info["id"])
         result.append({
             "id": info["id"],
             "name": info["name"],
             "desc": info["desc"],
             "key": current_key,
             "default": info["default"],
+            "pad": current_pad,
+            "default_pad": info.get("default_pad", "A"),
         })
     return result
 
@@ -329,5 +390,40 @@ def matches_action(event_or_key, action: str, db=None) -> bool:
     if assigned == default and action in ACTION_ALIASES:
         if ev_key in ACTION_ALIASES[action] and not (ev_mods & ctrl_alt):
             return True
+
+    return False
+
+
+def matches_gamepad_action(pressed_inputs: set[str], action: str, db=None) -> bool:
+    """
+    Verifica si el conjunto de entradas activas de joystick coincide con la acción asignada,
+    soportando combinaciones compuestas (ej: Back+Start) y alias secundarios por defecto.
+    """
+    if not pressed_inputs:
+        return False
+
+    assigned = get_gamepad_binding(db, action)
+    if not assigned:
+        return False
+
+    # Si es una combinación compuesta por '+' (ej: Back+Start)
+    if "+" in assigned:
+        parts = [p.strip() for p in assigned.split("+")]
+        if all(p in pressed_inputs for p in parts):
+            return True
+    else:
+        if assigned in pressed_inputs:
+            return True
+
+    # Si está en el valor predeterminado, admitir alias secundarios estándar
+    default_pad = next((info.get("default_pad", "") for info in ACTIONS_INFO if info["id"] == action), "")
+    if assigned == default_pad and action in GAMEPAD_ACTION_ALIASES:
+        for alias in GAMEPAD_ACTION_ALIASES[action]:
+            if "+" in alias:
+                parts = [p.strip() for p in alias.split("+")]
+                if all(p in pressed_inputs for p in parts):
+                    return True
+            elif alias in pressed_inputs:
+                return True
 
     return False

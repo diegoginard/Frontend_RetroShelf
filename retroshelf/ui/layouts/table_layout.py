@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 )
 from retroshelf.ui.layouts.base import BaseLayout
+from retroshelf.services.controls import matches_action, ACTION_NAV_BACK
 
 class TableLayout(BaseLayout):
     """
@@ -155,6 +156,10 @@ class TableLayout(BaseLayout):
                     self.game_activated.emit(game_id)
 
     def keyPressEvent(self, event):
+        if matches_action(event, ACTION_NAV_BACK):
+            self.nav_back_requested.emit()
+            event.accept()
+            return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self.current_game_id:
                 self.game_activated.emit(self.current_game_id)

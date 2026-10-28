@@ -9,6 +9,12 @@ from PySide6.QtWidgets import (
 )
 from retroshelf.db import Database
 from retroshelf.services.launcher import launch_game
+from retroshelf.services.controls import (
+    ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_BACK, ACTION_SELECT,
+    ACTION_PAGE_UP, ACTION_PAGE_DOWN, ACTION_MUTE, ACTION_CLOSE_EMULATOR,
+    matches_action
+)
+from retroshelf.services.gamepad import get_gamepad_manager
 from retroshelf.ui.layouts import LAYOUT_REGISTRY, get_available_layouts, create_layout, resolve_theme_name
 
 PLAYER_STYLESHEET = """
@@ -83,6 +89,10 @@ class PlayerWindow(QMainWindow):
         self.resize(1280, 800)
         self.setMinimumSize(800, 480)
         self.setStyleSheet(PLAYER_STYLESHEET)
+
+        # Gestor de mandos y joysticks en tiempo real
+        self.gamepad_manager = get_gamepad_manager(self.db)
+        self.gamepad_manager.action_triggered.connect(self._on_gamepad_action)
 
         self._build_ui()
         self._setup_shortcuts()
@@ -167,7 +177,7 @@ class PlayerWindow(QMainWindow):
         b_layout.addWidget(self.status_label)
         b_layout.addStretch()
 
-        tip_label = QLabel("F11: Pantalla completa  |  Enter: Seleccionar / Jugar  |  Esc / Retroceso: Volver")
+        tip_label = QLabel("F11: Pantalla completa  |  A / Enter: Seleccionar / Jugar  |  B / Retroceso: Volver atrás")
         tip_label.setStyleSheet("color: #647087; font-size: 9pt;")
         b_layout.addWidget(tip_label)
 
@@ -180,29 +190,97 @@ class PlayerWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key_F11), self, self.toggle_fullscreen)
         # Ctrl+F para buscar
         QShortcut(QKeySequence("Ctrl+F"), self, self.search_box.setFocus)
-        # Escape para retroceder o salir de pantalla completa
-        QShortcut(QKeySequence(Qt.Key_Escape), self, self._on_escape)
-        # Backspace para retroceder en la navegación de menús
-        QShortcut(QKeySequence(Qt.Key_Backspace), self, self._on_backspace)
+        # Escape y Backspace para retroceder
+        QShortcut(QKeySequence(Qt.Key_Escape), self, self.go_back)
+        QShortcut(QKeySequence(Qt.Key_Backspace), self, self.go_back)
 
-    def _on_backspace(self):
+    def go_back(self):
+        """Retrocede en el historial de navegación (listas de listas o menús)."""
         if self.search_box.hasFocus():
+            self.search_box.clear()
+            self.search_box.clearFocus()
             return
         if self.navigation_history:
-            prev_id = self.navigation_history.pop()
-            self.select_list(prev_id, push_history=False)
-
-    def _on_escape(self):
-        if self.navigation_history:
-            prev_id = self.navigation_history.pop()
-            self.select_list(prev_id, push_history=False)
+            prev_entry = self.navigation_history.pop()
+            if isinstance(prev_entry, int):
+                self.select_list(prev_entry, push_history=False)
+            elif isinstance(prev_entry, dict):
+                lid = prev_entry.get("list_id") or prev_entry.get("id")
+                if lid:
+                    self.select_list(int(lid), push_history=False)
             return
         if self.isFullScreen():
             self.showNormal()
             self.fullscreen_btn.setText("⛶ Pantalla completa")
-        elif self.search_box.hasFocus():
-            self.search_box.clear()
-            self.search_box.clearFocus()
+
+    def keyPressEvent(self, event):
+        if matches_action(event, ACTION_NAV_BACK, self.db):
+            self.go_back()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _on_gamepad_action(self, action_id: str):
+        """Procesa acciones provenientes de cualquier mando/joystick conectado."""
+        if not self.isActiveWindow():
+            return
+
+        current_layout = self.layout_stack.currentWidget()
+        if not current_layout:
+            return
+
+        if action_id == ACTION_NAV_UP:
+            if hasattr(current_layout, "_navigate_steps"):
+                current_layout._navigate_steps(-1)
+            elif hasattr(current_layout, "wheel_list"):
+                row = max(0, current_layout.wheel_list.currentRow() - 1)
+                current_layout.wheel_list.setCurrentRow(row)
+            elif hasattr(current_layout, "table"):
+                row = max(0, current_layout.table.currentRow() - 1)
+                current_layout.table.selectRow(row)
+
+        elif action_id == ACTION_NAV_DOWN:
+            if hasattr(current_layout, "_navigate_steps"):
+                current_layout._navigate_steps(1)
+            elif hasattr(current_layout, "wheel_list"):
+                row = min(current_layout.wheel_list.count() - 1, current_layout.wheel_list.currentRow() + 1)
+                current_layout.wheel_list.setCurrentRow(row)
+            elif hasattr(current_layout, "table"):
+                row = min(current_layout.table.rowCount() - 1, current_layout.table.currentRow() + 1)
+                current_layout.table.selectRow(row)
+
+        elif action_id == ACTION_PAGE_UP:
+            if hasattr(current_layout, "_navigate_steps"):
+                current_layout._navigate_steps(-5)
+            elif hasattr(current_layout, "wheel_list"):
+                row = max(0, current_layout.wheel_list.currentRow() - 5)
+                current_layout.wheel_list.setCurrentRow(row)
+
+        elif action_id == ACTION_PAGE_DOWN:
+            if hasattr(current_layout, "_navigate_steps"):
+                current_layout._navigate_steps(5)
+            elif hasattr(current_layout, "wheel_list"):
+                row = min(current_layout.wheel_list.count() - 1, current_layout.wheel_list.currentRow() + 5)
+                current_layout.wheel_list.setCurrentRow(row)
+
+        elif action_id == ACTION_SELECT:
+            if hasattr(current_layout, "get_selected_game_id"):
+                gid = current_layout.get_selected_game_id()
+                if gid:
+                    if hasattr(current_layout, "_play_select_sound"):
+                        current_layout._play_select_sound()
+                    self._on_game_activated(gid)
+            elif self.current_game_id:
+                self._on_game_activated(self.current_game_id)
+
+        elif action_id == ACTION_NAV_BACK:
+            self.go_back()
+
+        elif action_id == ACTION_MUTE:
+            if hasattr(current_layout, "set_muted"):
+                current_layout.set_muted(not current_layout.is_muted())
+            elif hasattr(current_layout, "set_media_muted"):
+                current_layout.set_media_muted(not getattr(current_layout, "_media_muted", False))
 
     def apply_video_settings(self):
         """Pre-calcula la configuración de video para aplicarla una vez que la ventana sea visible."""
@@ -350,6 +428,8 @@ class PlayerWindow(QMainWindow):
         inst.db = self.db
         inst.game_selected.connect(self._on_game_selected)
         inst.game_activated.connect(self._on_game_activated)
+        if hasattr(inst, "nav_back_requested"):
+            inst.nav_back_requested.connect(self.go_back)
         self.active_layouts[layout_name] = inst
         self.layout_stack.addWidget(inst)
         return inst
