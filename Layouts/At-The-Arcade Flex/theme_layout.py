@@ -10,10 +10,13 @@ ruleta curva interactiva para RetroShelf.
 import os
 import math
 import random
+import time
+import threading
+from collections import deque
 from pathlib import Path
 import retroshelf  # Asegura configuración FFmpeg antes de importar QtMultimedia
 
-from PySide6.QtCore import Qt, QSize, QUrl, QRect, QPoint, QTimer, QRectF
+from PySide6.QtCore import Qt, QSize, QUrl, QRect, QPoint, QTimer, QRectF, QThread, Signal
 from PySide6.QtGui import (
     QFont, QColor, QPainter, QPainterPath, QPixmap, QIcon, QBrush, QPen,
     QFontDatabase, QTransform, QImage
@@ -31,6 +34,92 @@ from retroshelf.services.controls import (
 
 LAYOUT_DIR = Path(__file__).resolve().parent
 COMMON_DIR = LAYOUT_DIR.parent / "gtc-common"
+
+
+class WheelPreloadWorker(QThread):
+    """
+    Hilo de trabajo en segundo plano para pre-cargar y pre-escalar logotipos de rueda (wheel)
+    de forma asíncrona sin bloquear jamás el renderizado de la interfaz ni la tasa de cuadros.
+    """
+    wheel_loaded = Signal(int, QImage)  # (game_id, scaled_qimage)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._queue = deque()
+        self._queued_ids = set()
+        self._lock = threading.Lock()
+        self._running = True
+        self._event = threading.Event()
+
+    def stop(self):
+        self._running = False
+        self._event.set()
+        self.wait(500)
+
+    def clear(self):
+        with self._lock:
+            self._queue.clear()
+            self._queued_ids.clear()
+
+    def queue_game(self, game: dict, priority: bool = False):
+        gid = game.get("id")
+        if not gid:
+            return
+        with self._lock:
+            if gid not in self._queued_ids:
+                if priority:
+                    self._queue.appendleft(game)
+                else:
+                    self._queue.append(game)
+                self._queued_ids.add(gid)
+        self._event.set()
+
+    def queue_games(self, games_list: list[dict], priority: bool = False):
+        with self._lock:
+            items = reversed(games_list) if priority else games_list
+            for g in items:
+                gid = g.get("id")
+                if gid and gid not in self._queued_ids:
+                    if priority:
+                        self._queue.appendleft(g)
+                    else:
+                        self._queue.append(g)
+                    self._queued_ids.add(gid)
+        self._event.set()
+
+    def run(self):
+        img_exts = (".png", ".webp", ".jpg", ".jpeg")
+        while self._running:
+            game = None
+            with self._lock:
+                if self._queue:
+                    game = self._queue.popleft()
+                else:
+                    self._event.clear()
+
+            if not game:
+                self._event.wait(timeout=0.05)
+                continue
+
+            gid = game.get("id")
+            try:
+                w_file = None
+                wheel_folder = game.get("wheel_path")
+                rom = game.get("rom_path", "")
+                stem = Path(rom).stem if rom else ""
+                if wheel_folder and stem:
+                    w_file = cached_find_media_file(wheel_folder, stem, img_exts)
+                if not w_file:
+                    fb = resolve_game_media(game)
+                    w_file = fb.get("wheel")
+                if w_file and os.path.isfile(w_file):
+                    img = QImage(w_file)
+                    if not img.isNull():
+                        if img.width() > 480 or img.height() > 240:
+                            img = img.scaled(480, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        self.wheel_loaded.emit(gid, img)
+            except Exception:
+                pass
 
 
 class ThemeLayout(BaseLayout):
@@ -143,6 +232,19 @@ class ThemeLayout(BaseLayout):
         self._video_debounce_timer.setSingleShot(True)
         self._video_debounce_timer.setInterval(160)
         self._video_debounce_timer.timeout.connect(self._play_debounced_video)
+
+        # Temporizador para diferir la lectura en disco de artes pesadas (cabinet/marquee/bezel) durante el giro
+        self._art_debounce_timer = QTimer(self)
+        self._art_debounce_timer.setSingleShot(True)
+        self._art_debounce_timer.setInterval(120)
+        self._art_debounce_timer.timeout.connect(self._load_current_game_art)
+        self._last_nav_time = 0.0
+
+        # Worker en segundo plano para pre-carga asíncrona de logotipos de rueda
+        self._text_wheel_cache = {}
+        self._wheel_worker = WheelPreloadWorker(self)
+        self._wheel_worker.wheel_loaded.connect(self._on_wheel_image_loaded)
+        self._wheel_worker.start()
 
         self._video_watchdog_timer = QTimer(self)
         self._video_watchdog_timer.setSingleShot(True)
@@ -436,14 +538,72 @@ class ThemeLayout(BaseLayout):
     # -------------------------------------------------------------------------
     # INTERFAZ BASELAYOUT
     # -------------------------------------------------------------------------
+    def _on_wheel_image_loaded(self, gid: int, img: QImage):
+        if not img.isNull():
+            pix = QPixmap.fromImage(img)
+            self._wheel_pixmaps[gid] = pix
+            # Limitar memoria RAM a un máximo de 600 logotipos cargados
+            if len(self._wheel_pixmaps) > 600:
+                for old_gid in list(self._wheel_pixmaps.keys()):
+                    if not self._is_game_visible_in_wheel(old_gid):
+                        del self._wheel_pixmaps[old_gid]
+                        break
+            if self._is_game_visible_in_wheel(gid):
+                self.update()
+
+    def _is_game_visible_in_wheel(self, game_id: int) -> bool:
+        if not self.games:
+            return False
+        n = len(self.games)
+        half_slots = 5
+        curr_center = int(round(self._current_pos))
+        for offset in range(-half_slots, half_slots + 1):
+            idx = (curr_center + offset) % n
+            if self.games[idx].get("id") == game_id:
+                return True
+        return False
+
+    def _preload_around(self, center_idx: int):
+        if not self.games or not hasattr(self, "_wheel_worker") or not self._wheel_worker:
+            return
+        n = len(self.games)
+        window = []
+        for i in range(-5, 35):
+            idx = (center_idx + i) % n
+            g = self.games[idx]
+            if g.get("id") not in self._wheel_pixmaps:
+                window.append(g)
+        if window:
+            self._wheel_worker.queue_games(window)
+
+    def _preload_direction(self, steps: int):
+        if not self.games or not hasattr(self, "_wheel_worker") or not self._wheel_worker:
+            return
+        n = len(self.games)
+        direction = 1 if steps > 0 else -1
+        window = []
+        start = self.selected_index
+        count = 30 if abs(steps) <= 1 else 50
+        for i in range(1, count + 1):
+            idx = (start + (i * direction)) % n
+            g = self.games[idx]
+            if g.get("id") not in self._wheel_pixmaps:
+                window.append(g)
+        if window:
+            self._wheel_worker.queue_games(window, priority=True)
+
     def set_games(self, games: list[dict]):
         self.games = games or []
         self._media_cache.clear()
         self._wheel_pixmaps.clear()
+        self._text_wheel_cache.clear()
+        if hasattr(self, "_wheel_worker") and self._wheel_worker:
+            self._wheel_worker.clear()
         self.selected_index = 0
         self._current_pos = 0.0
         self._target_pos = 0.0
-        self._update_selected_media()
+        self._update_selected_media(fast_repeat=False)
+        self._preload_around(0)
         self.update()
 
     def select_game_by_id(self, game_id: int):
@@ -451,7 +611,8 @@ class ThemeLayout(BaseLayout):
             if g.get("id") == game_id:
                 self.selected_index = idx
                 self._target_pos = float(idx)
-                self._update_selected_media()
+                self._preload_around(idx)
+                self._update_selected_media(fast_repeat=False)
                 self._reset_wheel_fade()
                 self.update()
                 break
@@ -470,6 +631,8 @@ class ThemeLayout(BaseLayout):
         self._want_game_video_playing = False
         self._video_debounce_timer.stop()
         self._video_watchdog_timer.stop()
+        if hasattr(self, "_art_debounce_timer"):
+            self._art_debounce_timer.stop()
         if self.game_audio:
             self.game_audio.setVolume(0.0)
         if self.game_player and self.game_player.mediaStatus() == QMediaPlayer.BufferedMedia:
@@ -479,6 +642,13 @@ class ThemeLayout(BaseLayout):
                 pass
         self._game_video_image = None
         self.update()
+
+    def closeEvent(self, event):
+        if hasattr(self, "_wheel_worker") and self._wheel_worker:
+            self._wheel_worker.stop()
+        self.stop_media()
+        if event is not None:
+            super().closeEvent(event)
 
     # -------------------------------------------------------------------------
     # NAVEGACIÓN Y ANIMACIÓN
@@ -497,7 +667,16 @@ class ThemeLayout(BaseLayout):
         self._pointer_current_x_ratio = self._pointer_pulse_x_ratio
         self._reset_wheel_fade()
         self._play_nav_sound()
-        self._update_selected_media(fast_repeat=fast_repeat)
+
+        # Encolar pre-carga en segundo plano de los juegos en la dirección de giro
+        self._preload_direction(steps)
+
+        # Detectar navegación rápida (joystick o rueda mantenida) para diferir lecturas pesadas de disco
+        now = time.perf_counter()
+        is_rapid = fast_repeat or (now - getattr(self, "_last_nav_time", 0.0) < 0.22) or abs(self._target_pos - self._current_pos) > 0.08
+        self._last_nav_time = now
+
+        self._update_selected_media(fast_repeat=is_rapid)
         gid = self.get_selected_game_id()
         if gid:
             self.game_selected.emit(gid)
@@ -592,6 +771,8 @@ class ThemeLayout(BaseLayout):
         return pix
 
     def _load_current_game_art(self):
+        if not self.games or not (0 <= self.selected_index < len(self.games)):
+            return
         custom_cab_file = self.current_media.get("cabinet")
         custom_cab_pix = self._get_cached_art_pixmap(custom_cab_file) if custom_cab_file else None
         has_custom_cab = custom_cab_pix is not None
@@ -606,6 +787,7 @@ class ThemeLayout(BaseLayout):
 
         bezel_file = self.current_media.get("bezel")
         self._current_bezel_pix = self._get_cached_art_pixmap(bezel_file) if bezel_file else None
+        self.update()
 
     def _update_selected_media(self, fast_repeat: bool = False):
         self._flyer_ready = False
@@ -622,6 +804,8 @@ class ThemeLayout(BaseLayout):
             self._want_game_video_playing = False
             self._video_debounce_timer.stop()
             self._video_watchdog_timer.stop()
+            if hasattr(self, "_art_debounce_timer"):
+                self._art_debounce_timer.stop()
             self._flyer_delay_timer.stop()
             if self.game_audio:
                 self.game_audio.setVolume(0.0)
@@ -631,15 +815,22 @@ class ThemeLayout(BaseLayout):
         current_game = self.games[self.selected_index]
         self.current_media = self._resolve_game_media(current_game)
 
-        # Si se cambia de juego normalmente, cargar cabinet y marquee al instante;
-        # si se mantiene presionado recorriendo rápido la ruleta, diferir lectura de disco al detenerse
-        if not fast_repeat:
+        # Si el arte (cabinet, marquee) ya está en memoria caché, aplicarlo inmediatamente.
+        # Si requiere lectura en disco y la ruleta se está moviendo rápido, diferir la lectura al detenerse.
+        custom_cab_file = self.current_media.get("cabinet")
+        marq_file = self.current_media.get("marquee")
+        cab_cached = (not custom_cab_file) or (custom_cab_file in self._art_pix_cache)
+        marq_cached = (not marq_file) or (marq_file in self._art_pix_cache)
+
+        if cab_cached and marq_cached:
+            if hasattr(self, "_art_debounce_timer"):
+                self._art_debounce_timer.stop()
             self._load_current_game_art()
         else:
-            custom_cab_file = self.current_media.get("cabinet")
-            if custom_cab_file and custom_cab_file in self._art_pix_cache:
-                self._load_current_game_art()
-            elif not custom_cab_file:
+            if fast_repeat:
+                if hasattr(self, "_art_debounce_timer"):
+                    self._art_debounce_timer.start(120)
+            else:
                 self._load_current_game_art()
 
         # Reproducir video snap con debounce suave para no bloquear al girar rápido la ruleta
@@ -922,19 +1113,19 @@ class ThemeLayout(BaseLayout):
 
     def _get_wheel_pixmap(self, game: dict) -> QPixmap | None:
         gid = game.get("id")
+        # 1. Si el logotipo ya fue decodificado y pre-escalado en RAM, retorno instantáneo (0 ms)
         if gid in self._wheel_pixmaps:
             return self._wheel_pixmaps[gid]
 
-        media = self._resolve_game_media(game)
-        w_file = media.get("wheel")
-        pix = self._load_pixmap(w_file)
-        if pix and (pix.width() > 480 or pix.height() > 240):
-            pix = pix.scaled(480, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        if not pix:
+        # 2. Si no está en RAM, solicitar carga asíncrona inmediata en segundo plano
+        if hasattr(self, "_wheel_worker") and self._wheel_worker:
+            self._wheel_worker.queue_game(game, priority=True)
+
+        # 3. Retornar inmediatamente un logotipo de respaldo en memoria SIN BLOQUEAR paintEvent
+        if gid not in self._text_wheel_cache:
             title = game.get("title") or "Arcade Game"
-            pix = self._create_text_wheel_pixmap(title)
-        self._wheel_pixmaps[gid] = pix
-        return pix
+            self._text_wheel_cache[gid] = self._create_text_wheel_pixmap(title)
+        return self._text_wheel_cache[gid]
 
     def _draw_footer(self, painter: QPainter, w: int, h: int):
         bar_h = max(26, int(h * 0.042))
