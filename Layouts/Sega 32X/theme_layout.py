@@ -697,7 +697,9 @@ class ThemeLayout(BaseLayout):
         if target_file and os.path.isfile(target_file):
             self._want_video_playing = True
             if self.audio_output:
-                self.audio_output.setVolume(0.7 if is_snap else 0.0)
+                should_mute = bool(getattr(self, "_media_muted", False) or not is_snap)
+                self.audio_output.setMuted(should_mute)
+                self.audio_output.setVolume(0.0 if should_mute else 0.7)
                 if getattr(self, "_media_muted", False):
                     self.audio_output.setMuted(True)
             try:

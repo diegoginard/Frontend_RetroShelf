@@ -468,6 +468,7 @@ class ThemeLayout(BaseLayout):
         self.player.setLoops(QMediaPlayer.Infinite)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
+        self.audio_output.setMuted(self._media_muted)
         self.audio_output.setVolume(0.0 if self._media_muted else 0.8)
 
         self.video_sink = QVideoSink(self)
@@ -499,6 +500,7 @@ class ThemeLayout(BaseLayout):
         if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
             if getattr(self, "_want_video_playing", False) and self.isVisible():
                 if self.audio_output:
+                    self.audio_output.setMuted(self._media_muted)
                     self.audio_output.setVolume(0.0 if self._media_muted else 0.8)
                 if self.player.playbackState() != QMediaPlayer.PlayingState:
                     self.player.play()
@@ -607,6 +609,7 @@ class ThemeLayout(BaseLayout):
         self._media_muted = muted
         if self.audio_output:
             self.audio_output.setMuted(muted)
+            self.audio_output.setVolume(0.0 if muted else 0.8)
 
     def set_muted(self, muted: bool):
         self.set_media_muted(muted)
@@ -697,6 +700,7 @@ class ThemeLayout(BaseLayout):
         if video_to_play and os.path.isfile(video_to_play):
             self._want_video_playing = True
             if self.audio_output:
+                self.audio_output.setMuted(self._media_muted)
                 self.audio_output.setVolume(0.0 if self._media_muted else 0.8)
             source_url = QUrl.fromLocalFile(video_to_play)
             try:
