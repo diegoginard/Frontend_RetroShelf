@@ -8,6 +8,7 @@ reproducción de video, animaciones de entrada, giro de disco CD y renderizado
 completo del sistema Atari Jaguar CD para RetroShelf.
 """
 import os
+import time
 import math
 import random
 from pathlib import Path
@@ -255,6 +256,7 @@ class ThemeLayout(BaseLayout):
         # Animación de giro suave de la ruleta
         self._wheel_spin_offset = 0.0
         self._wheel_spin_timer = QTimer(self)
+        self._wheel_spin_timer.setTimerType(Qt.PreciseTimer)
         self._wheel_spin_timer.timeout.connect(self._on_wheel_spin_tick)
 
         # Animación del Avatar
@@ -539,6 +541,13 @@ class ThemeLayout(BaseLayout):
             p_path = getattr(self, "_pending_video_path", None)
             if p_path and self.player.source() != QUrl.fromLocalFile(p_path):
                 return
+            # Si la ruleta esta girando activamente, no extraer frames pesados por PCIe para mantener 60 FPS
+            if hasattr(self, "_wheel_spin_timer") and self._wheel_spin_timer.isActive() and self._current_video_image is not None:
+                return
+            now = time.perf_counter()
+            if now - getattr(self, "_last_video_frame_time", 0.0) < 0.033:  # Cap a 30 FPS para CRT
+                return
+            self._last_video_frame_time = now
             img = frame.toImage()
             if not img.isNull():
                 self._current_video_image = img
@@ -693,7 +702,7 @@ class ThemeLayout(BaseLayout):
         self._current_video_image = None
         if hasattr(self, "_video_debounce_timer"):
             self._video_debounce_timer.stop()
-            self._video_debounce_timer.start(160)
+            self._video_debounce_timer.start(350)
         else:
             self._play_debounced_video()
 
@@ -887,11 +896,17 @@ class ThemeLayout(BaseLayout):
 
             # Capa 7: Chasis de la Consola Atari Jaguar CD
             if self._pix_console:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_console)
+                if getattr(self, "_cached_console_size", None) != (sw, sh):
+                    self._cached_console_pix = self._pix_console.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_console_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_console_pix)
 
             # Capa 8: Tapa / Cubierta de consola (si la tuviese)
             if self._pix_console_cover:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_console_cover)
+                if getattr(self, "_cached_console_cover_size", None) != (sw, sh):
+                    self._cached_console_cover_pix = self._pix_console_cover.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_console_cover_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_console_cover_pix)
 
             # Capa 9: Carátula del juego (Boxart)
             self._draw_boxart(painter, sr)
@@ -901,11 +916,17 @@ class ThemeLayout(BaseLayout):
 
             # Capa 11: Joystick (si estuviese presente)
             if self._pix_joystick:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_joystick)
+                if getattr(self, "_cached_joystick_size", None) != (sw, sh):
+                    self._cached_joystick_pix = self._pix_joystick.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_joystick_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_joystick_pix)
 
             # Capa 12: Sombra / fondo de la ruleta (desde gtc-common)
             if self._pix_wheel_shadow:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_wheel_shadow)
+                if getattr(self, "_cached_wheel_shadow_size", None) != (sw, sh):
+                    self._cached_wheel_shadow_pix = self._pix_wheel_shadow.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_wheel_shadow_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_wheel_shadow_pix)
 
             # Capa 13: Ruleta curva interactiva
             if self.games:

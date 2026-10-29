@@ -8,6 +8,7 @@ reproducción de video, animaciones de entrada, giro de CD y renderizado
 completo del sistema Sony PlayStation para RetroShelf.
 """
 import os
+import time
 import math
 import random
 from pathlib import Path
@@ -242,6 +243,7 @@ class ThemeLayout(BaseLayout):
         # Animación de giro suave de la ruleta
         self._wheel_spin_offset = 0.0
         self._wheel_spin_timer = QTimer(self)
+        self._wheel_spin_timer.setTimerType(Qt.PreciseTimer)
         self._wheel_spin_timer.timeout.connect(self._on_wheel_spin_tick)
 
         # Animación del Avatar (Crash Bandicoot)
@@ -461,7 +463,7 @@ class ThemeLayout(BaseLayout):
         self._pending_video_is_snap = False
         self._video_debounce_timer = QTimer(self)
         self._video_debounce_timer.setSingleShot(True)
-        self._video_debounce_timer.setInterval(160)
+        self._video_debounce_timer.setInterval(350)
         self._video_debounce_timer.timeout.connect(self._play_debounced_video)
 
         self._video_watchdog_timer = QTimer(self)
@@ -530,6 +532,13 @@ class ThemeLayout(BaseLayout):
             p_path = getattr(self, "_pending_video_path", None)
             if p_path and self.player.source() != QUrl.fromLocalFile(p_path):
                 return
+            # Si la ruleta esta girando activamente, no extraer frames pesados por PCIe para mantener 60 FPS
+            if hasattr(self, "_wheel_spin_timer") and self._wheel_spin_timer.isActive() and self._current_video_image is not None:
+                return
+            now = time.perf_counter()
+            if now - getattr(self, "_last_video_frame_time", 0.0) < 0.033:  # Cap a 30 FPS para CRT
+                return
+            self._last_video_frame_time = now
             img = frame.toImage()
             if not img.isNull():
                 self._current_video_image = img
@@ -613,8 +622,13 @@ class ThemeLayout(BaseLayout):
 
     def _load_game_media(self, game: dict):
         gid = game.get("id")
-        if self.db and gid:
+        if not hasattr(self, "_media_cache"):
+            self._media_cache = {}
+        if gid and gid in self._media_cache:
+            self.current_media = self._media_cache[gid]
+        elif self.db and gid:
             self.current_media = resolve_game_media(self.db, gid, game)
+            self._media_cache[gid] = self.current_media
         else:
             self.current_media = {
                 "boxart": game.get("cover_path") or game.get("boxart_path"),
@@ -883,7 +897,10 @@ class ThemeLayout(BaseLayout):
 
             # Capa 12: Sombra / fondo de la ruleta (desde gtc-common)
             if self._pix_wheel_shadow:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_wheel_shadow)
+                if getattr(self, "_cached_wheel_shadow_size", None) != (sw, sh):
+                    self._cached_wheel_shadow_pix = self._pix_wheel_shadow.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_wheel_shadow_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_wheel_shadow_pix)
 
             # Capa 13: Ruleta curva interactiva
             if self.games:

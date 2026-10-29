@@ -54,6 +54,8 @@ class PlayerWindow(QMainWindow):
 
         self.setWindowTitle("RetroShelf — Frontend")
         self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setStyleSheet(PLAYER_STYLESHEET)
 
         # Gestor de mandos y joysticks en tiempo real
@@ -147,16 +149,18 @@ class PlayerWindow(QMainWindow):
         if not driver:
             driver = "GPU"
 
-        self.fps_label.setStyleSheet(f"""
-            background-color: rgba(12, 14, 20, 0.88);
-            color: {color};
-            font-family: 'Consolas', 'Segoe UI', monospace;
-            font-size: 13px;
-            font-weight: bold;
-            padding: 5px 12px;
-            border-radius: 8px;
-            border: 1px solid {color}88;
-        """)
+        if getattr(self, "_last_fps_color", None) != color:
+            self.fps_label.setStyleSheet(f"""
+                background-color: rgba(12, 14, 20, 0.88);
+                color: {color};
+                font-family: 'Consolas', 'Segoe UI', monospace;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 5px 12px;
+                border-radius: 8px;
+                border: 1px solid {color}88;
+            """)
+            self._last_fps_color = color
         self.fps_label.setText(f"{fps:.1f} FPS ({frame_ms:.1f} ms) • {driver} • {self.width()}x{self.height()}")
         self.fps_label.adjustSize()
         self._reposition_fps_label()
@@ -609,8 +613,10 @@ class PlayerWindow(QMainWindow):
             QMessageBox.critical(self, "No se pudo iniciar el juego", str(e))
 
     def closeEvent(self, event):
-        """Detiene cualquier reproducción activa antes de cerrar la ventana."""
+        """Detiene cualquier reproducción activa y el hilo de mandos antes de cerrar la ventana."""
         self.stop_all_active_media()
+        if hasattr(self, "gamepad_manager") and self.gamepad_manager:
+            self.gamepad_manager.stop()
         super().closeEvent(event)
 
 

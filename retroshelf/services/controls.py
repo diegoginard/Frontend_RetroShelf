@@ -346,6 +346,11 @@ def set_gamepad_binding(db, action: str, pad_btn: str):
     """Guarda una asignación de botón de mando en la base de datos."""
     if db:
         db.set_setting(f"gamepad_{action}", pad_btn.strip())
+        try:
+            from retroshelf.services.gamepad import get_gamepad_manager
+            get_gamepad_manager(db).refresh_bindings()
+        except Exception:
+            pass
 
 
 def reset_default_gamepad_bindings(db):
@@ -353,6 +358,11 @@ def reset_default_gamepad_bindings(db):
     if db:
         for info in ACTIONS_INFO:
             db.set_setting(f"gamepad_{info['id']}", info.get("default_pad", "A"))
+        try:
+            from retroshelf.services.gamepad import get_gamepad_manager
+            get_gamepad_manager(db).refresh_bindings()
+        except Exception:
+            pass
 
 
 def get_all_bindings(db=None) -> list[dict]:

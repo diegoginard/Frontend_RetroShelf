@@ -230,13 +230,13 @@ class ThemeLayout(BaseLayout):
 
         self._video_debounce_timer = QTimer(self)
         self._video_debounce_timer.setSingleShot(True)
-        self._video_debounce_timer.setInterval(160)
+        self._video_debounce_timer.setInterval(350)
         self._video_debounce_timer.timeout.connect(self._play_debounced_video)
 
         # Temporizador para diferir la lectura en disco de artes pesadas (cabinet/marquee/bezel) durante el giro
         self._art_debounce_timer = QTimer(self)
         self._art_debounce_timer.setSingleShot(True)
-        self._art_debounce_timer.setInterval(120)
+        self._art_debounce_timer.setInterval(250)
         self._art_debounce_timer.timeout.connect(self._load_current_game_art)
         self._last_nav_time = 0.0
 
@@ -266,10 +266,11 @@ class ThemeLayout(BaseLayout):
         self.game_sink = None
         self._media_muted = False
 
-        # Animación suave de la ruleta (posición interpolada a 60 FPS)
+        # Animación suave de la ruleta (posición interpolada a 60 FPS con precisión de temporizador)
         self._current_pos = 0.0
         self._target_pos = 0.0
         self._anim_timer = QTimer(self)
+        self._anim_timer.setTimerType(Qt.PreciseTimer)
         self._anim_timer.setInterval(16)  # ~60 FPS
         self._anim_timer.timeout.connect(self._on_animation_tick)
         self._anim_timer.start()
@@ -371,9 +372,28 @@ class ThemeLayout(BaseLayout):
         self.bg_player.play()
 
     def _on_bg_frame(self, frame):
-        if frame.isValid():
-            self._bg_video_image = frame.toImage()
-            self.update()
+        if not frame.isValid():
+            return
+        # Si la ruleta está en movimiento, no bloquear el hilo de la UI extrayendo frames pesados de fondo
+        is_moving = abs(self._target_pos - self._current_pos) > 0.01 or (time.perf_counter() - getattr(self, "_last_nav_time", 0.0) < 0.25)
+        if is_moving and getattr(self, "_bg_video_pix", None) is not None:
+            return
+
+        now = time.perf_counter()
+        if now - getattr(self, "_last_bg_frame_time", 0.0) < 0.040:  # Cap a 25 FPS para fondo
+            return
+        self._last_bg_frame_time = now
+
+        img = frame.toImage()
+        if not img.isNull():
+            w, h = self.width(), self.height()
+            if w > 0 and h > 0 and (img.width() != w or img.height() != h):
+                self._bg_video_pix = QPixmap.fromImage(img).scaled(w, h, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+            else:
+                self._bg_video_pix = QPixmap.fromImage(img)
+            self._bg_video_image = img
+            if not is_moving:
+                self.update()
 
     def _init_game_player(self):
         if self._game_player_initialized and self.game_player is not None:
@@ -463,6 +483,13 @@ class ThemeLayout(BaseLayout):
         if frame.isValid() and self._want_game_video_playing and self.game_player:
             if self._pending_video_path and self.game_player.source() != QUrl.fromLocalFile(self._pending_video_path):
                 return
+            is_moving = abs(self._target_pos - self._current_pos) > 0.01 or (time.perf_counter() - getattr(self, "_last_nav_time", 0.0) < 0.20)
+            if is_moving and self._game_video_image is not None:
+                return
+            now = time.perf_counter()
+            if now - getattr(self, "_last_game_frame_time", 0.0) < 0.033:  # Cap a 30 FPS para monitor CRT
+                return
+            self._last_game_frame_time = now
             img = frame.toImage()
             if not img.isNull():
                 self._game_video_image = img
@@ -602,17 +629,18 @@ class ThemeLayout(BaseLayout):
         self.selected_index = 0
         self._current_pos = 0.0
         self._target_pos = 0.0
-        self._update_selected_media(fast_repeat=False)
         self._preload_around(0)
+        self._play_debounced_video()
         self.update()
 
     def select_game_by_id(self, game_id: int):
         for idx, g in enumerate(self.games):
             if g.get("id") == game_id:
                 self.selected_index = idx
+                self._current_pos = float(idx)
                 self._target_pos = float(idx)
                 self._preload_around(idx)
-                self._update_selected_media(fast_repeat=False)
+                self._play_debounced_video()
                 self._reset_wheel_fade()
                 self.update()
                 break
@@ -671,6 +699,11 @@ class ThemeLayout(BaseLayout):
         # Encolar pre-carga en segundo plano de los juegos en la dirección de giro
         self._preload_direction(steps)
 
+        # Iniciar timer de animación si no estaba corriendo
+        if hasattr(self, "_anim_timer") and not self._anim_timer.isActive():
+            self._last_anim_time = time.perf_counter()
+            self._anim_timer.start(16)
+
         # Detectar navegación rápida (joystick o rueda mantenida) para diferir lecturas pesadas de disco
         now = time.perf_counter()
         is_rapid = fast_repeat or (now - getattr(self, "_last_nav_time", 0.0) < 0.22) or abs(self._target_pos - self._current_pos) > 0.08
@@ -689,6 +722,9 @@ class ThemeLayout(BaseLayout):
         self._current_flyer_pix = self._get_cached_art_pixmap(flyer_file) if flyer_file else None
         if self._current_flyer_pix is not None:
             self._flyer_ready = True
+            if hasattr(self, "_anim_timer") and not self._anim_timer.isActive():
+                self._last_anim_time = time.perf_counter()
+                self._anim_timer.start(16)
             self.update()
 
     def _play_nav_sound(self):
@@ -707,6 +743,9 @@ class ThemeLayout(BaseLayout):
 
     def _start_wheel_fadeout(self):
         self._target_wheel_alpha = 0.0
+        if hasattr(self, "_anim_timer") and not self._anim_timer.isActive():
+            self._last_anim_time = time.perf_counter()
+            self._anim_timer.start(16)
 
     def _reset_wheel_fade(self):
         self._wheel_alpha = 255.0
@@ -716,10 +755,16 @@ class ThemeLayout(BaseLayout):
     def _on_animation_tick(self):
         needs_update = False
 
-        # 1. Interpolación de la ruleta
+        now = time.perf_counter()
+        dt = now - getattr(self, "_last_anim_time", now)
+        self._last_anim_time = now
+        dt = min(max(dt, 0.001), 0.050)
+
+        # 1. Interpolación suave de la ruleta basada en delta-time
         diff = self._target_pos - self._current_pos
-        if abs(diff) > 0.005:
-            self._current_pos += diff * 0.28
+        if abs(diff) > 0.004:
+            ease = 1.0 - math.exp(-22.0 * dt)
+            self._current_pos += diff * ease
             needs_update = True
             # Mientras el carrusel de wheels sigue girando, reiniciar los 1.5 segundos del flyer
             self._flyer_ready = False
@@ -728,20 +773,25 @@ class ThemeLayout(BaseLayout):
         else:
             if self._current_pos != self._target_pos:
                 self._current_pos = self._target_pos
+                needs_update = True
                 self._flyer_delay_timer.start(1000)
 
         # 2. Desvanecimiento suave de la ruleta (Wheel fadeout)
         a_diff = self._target_wheel_alpha - self._wheel_alpha
         if abs(a_diff) > 1.0:
-            self._wheel_alpha += a_diff * 0.10
+            a_ease = 1.0 - math.exp(-12.0 * dt)
+            self._wheel_alpha += a_diff * a_ease
             needs_update = True
         else:
-            self._wheel_alpha = self._target_wheel_alpha
+            if self._wheel_alpha != self._target_wheel_alpha:
+                self._wheel_alpha = self._target_wheel_alpha
+                needs_update = True
 
-        # 3. Deslizamiento suave del flyer (solo tras cumplirse los 2s desde que se detuvo el carrusel)
+        # 3. Deslizamiento suave del flyer
         if self._flyer_ready and self._current_flyer_pix is not None:
             if self._flyer_slide > 0.005:
-                self._flyer_slide += (0.0 - self._flyer_slide) * 0.15
+                f_ease = 1.0 - math.exp(-14.0 * dt)
+                self._flyer_slide += (0.0 - self._flyer_slide) * f_ease
                 needs_update = True
             elif self._flyer_slide != 0.0:
                 self._flyer_slide = 0.0
@@ -751,13 +801,19 @@ class ThemeLayout(BaseLayout):
         self._pointer_anim_tick += 1
         p_diff = self._pointer_rest_x_ratio - self._pointer_current_x_ratio
         if abs(p_diff) > 0.001:
-            self._pointer_current_x_ratio += p_diff * 0.22
+            p_ease = 1.0 - math.exp(-20.0 * dt)
+            self._pointer_current_x_ratio += p_diff * p_ease
             needs_update = True
         else:
             self._pointer_current_x_ratio = self._pointer_rest_x_ratio
 
         if needs_update:
             self.update()
+        else:
+            # Si todo llegó a reposo, detener el timer de animación para liberar 100% de CPU
+            if not self._flyer_ready and self._current_pos == self._target_pos and self._wheel_alpha == self._target_wheel_alpha:
+                if hasattr(self, "_anim_timer") and self._anim_timer.isActive():
+                    self._anim_timer.stop()
 
     def _get_cached_art_pixmap(self, path: str | None) -> QPixmap | None:
         if not path:
@@ -793,7 +849,7 @@ class ThemeLayout(BaseLayout):
         self._flyer_ready = False
         self._flyer_slide = 1.0
         self._current_flyer_pix = None
-        self._flyer_delay_timer.start(1500)
+        self._flyer_delay_timer.stop()
 
         if not self.games or not (0 <= self.selected_index < len(self.games)):
             self.current_media = {}
@@ -806,57 +862,41 @@ class ThemeLayout(BaseLayout):
             self._video_watchdog_timer.stop()
             if hasattr(self, "_art_debounce_timer"):
                 self._art_debounce_timer.stop()
-            self._flyer_delay_timer.stop()
             if self.game_audio:
                 self.game_audio.setVolume(0.0)
             self._game_video_image = None
             return
 
-        current_game = self.games[self.selected_index]
-        self.current_media = self._resolve_game_media(current_game)
+        # Si el reproductor de video estaba activo, silenciar y pausar una sola vez
+        if self._want_game_video_playing:
+            self._want_game_video_playing = False
+            if self.game_audio:
+                try:
+                    self.game_audio.setMuted(True)
+                    self.game_audio.setVolume(0.0)
+                except Exception:
+                    pass
+            if self.game_player:
+                try:
+                    self.game_player.pause()
+                except Exception:
+                    pass
 
-        # Si el arte (cabinet, marquee) ya está en memoria caché, aplicarlo inmediatamente.
-        # Si requiere lectura en disco y la ruleta se está moviendo rápido, diferir la lectura al detenerse.
-        custom_cab_file = self.current_media.get("cabinet")
-        marq_file = self.current_media.get("marquee")
-        cab_cached = (not custom_cab_file) or (custom_cab_file in self._art_pix_cache)
-        marq_cached = (not marq_file) or (marq_file in self._art_pix_cache)
-
-        if cab_cached and marq_cached:
-            if hasattr(self, "_art_debounce_timer"):
-                self._art_debounce_timer.stop()
-            self._load_current_game_art()
-        else:
-            if fast_repeat:
-                if hasattr(self, "_art_debounce_timer"):
-                    self._art_debounce_timer.start(120)
-            else:
-                self._load_current_game_art()
-
-        # Reproducir video snap con debounce suave para no bloquear al girar rápido la ruleta
-        self._pending_video_path = self.current_media.get("video")
-        self._want_game_video_playing = False
         self._video_watchdog_timer.stop()
-        if self.game_audio:
-            try:
-                self.game_audio.setMuted(True)
-                self.game_audio.setVolume(0.0)
-            except Exception:
-                pass
-        if self.game_player:
-            try:
-                self.game_player.pause()
-            except Exception:
-                pass
-        self._game_video_image = None
         self._video_debounce_timer.start()
 
     def _play_debounced_video(self):
-        if not self.isVisible():
+        if not self.isVisible() or not self.games or not (0 <= self.selected_index < len(self.games)):
             return
+
+        current_game = self.games[self.selected_index]
+        self.current_media = self._resolve_game_media(current_game)
         self._load_current_game_art()
+        self._flyer_delay_timer.start(1500)
         self.update()
-        video_path = self._pending_video_path
+
+        video_path = self.current_media.get("video")
+        self._pending_video_path = video_path
         if video_path and os.path.isfile(video_path):
             self._init_game_player()
             if self.game_player:
@@ -904,9 +944,13 @@ class ThemeLayout(BaseLayout):
         if w <= 0 or h <= 0:
             return
 
-        # 1. FONDO DE VIDEO O IMAGEN ESTÁTICA
-        if self._bg_video_image:
-            painter.drawImage(QRect(0, 0, w, h), self._bg_video_image)
+        # 1. FONDO DE VIDEO O IMAGEN ESTÁTICA (acelerado por hardware mediante QPixmap 1:1)
+        bg_pix = getattr(self, "_bg_video_pix", None)
+        if bg_pix and not bg_pix.isNull():
+            if bg_pix.width() == w and bg_pix.height() == h:
+                painter.drawPixmap(0, 0, bg_pix)
+            else:
+                painter.drawPixmap(0, 0, w, h, bg_pix)
         elif self._pix_bg_fallback:
             if not hasattr(self, "_cached_bg_pix") or getattr(self, "_cached_bg_size", None) != (w, h):
                 self._cached_bg_pix = self._pix_bg_fallback.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)

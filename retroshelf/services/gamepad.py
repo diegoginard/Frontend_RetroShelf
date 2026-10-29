@@ -6,14 +6,15 @@ Permite navegación simultánea con teclado y joystick, y asignación interactiv
 """
 
 import sys
+import time
 import ctypes
 from ctypes import wintypes
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, Signal, QThread
 
 from retroshelf.services.controls import (
     ACTIONS_INFO, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_LETTER, ACTION_NAV_STEP5,
     ACTION_NAV_BACK, ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN, ACTION_CLOSE_EMULATOR,
-    ACTION_MUTE, get_gamepad_binding, matches_gamepad_action
+    ACTION_MUTE, GAMEPAD_ACTION_ALIASES, get_gamepad_binding, matches_gamepad_action
 )
 
 # Estructuras para XInput
@@ -78,14 +79,20 @@ def is_gamepad_supported() -> bool:
     return _XINPUT_DLL is not None or _WINMM_DLL is not None
 
 
-def poll_raw_gamepad_inputs() -> set[str]:
+_WINMM_CONNECTED_DEVS: list[int] = []
+_WINMM_LAST_SCAN: float = 0.0
+
+
+def poll_raw_gamepad_inputs(force_winmm_rescan: bool = False) -> set[str]:
     """
     Sondea todos los mandos y joysticks conectados y retorna un conjunto
     con los nombres de todas las entradas (botones, crucetas, palancas) activas en este momento.
+    Utiliza caché temporal de dispositivos WinMM para no bloquear con esperas I/O de Windows.
     """
+    global _WINMM_CONNECTED_DEVS, _WINMM_LAST_SCAN
     inputs: set[str] = set()
 
-    # 1. Sondear XInput (puertos 0 a 3)
+    # 1. Sondear XInput (puertos 0 a 3) - consulta rápida (<0.2ms)
     if _XINPUT_DLL is not None:
         for port in range(4):
             xs = _XINPUT_STATE()
@@ -119,77 +126,104 @@ def poll_raw_gamepad_inputs() -> set[str]:
     # 2. Si no hubo entradas XInput, consultar mandos DirectInput / Arcade USB mediante WinMM
     if not inputs and _WINMM_DLL is not None:
         try:
-            num_devs = min(int(_WINMM_DLL.joyGetNumDevs()), 16)
-            ji = _JOYINFOEX()
-            ji.dwSize = ctypes.sizeof(_JOYINFOEX)
-            ji.dwFlags = 0xFF  # All flags
+            now = time.monotonic()
+            # Escanear puertos WinMM cada 3 segundos o si se fuerza explícitamente
+            if force_winmm_rescan or (now - _WINMM_LAST_SCAN > 3.0):
+                _WINMM_LAST_SCAN = now
+                active = []
+                max_devs = min(int(_WINMM_DLL.joyGetNumDevs()), 8)
+                ji_scan = _JOYINFOEX()
+                ji_scan.dwSize = ctypes.sizeof(_JOYINFOEX)
+                ji_scan.dwFlags = 0x01  # flag mínimo para probe de presencia
+                for dev_id in range(max_devs):
+                    if _WINMM_DLL.joyGetPosEx(dev_id, ctypes.byref(ji_scan)) == 0:
+                        active.append(dev_id)
+                _WINMM_CONNECTED_DEVS = active
 
-            for dev_id in range(num_devs):
-                if _WINMM_DLL.joyGetPosEx(dev_id, ctypes.byref(ji)) == 0:
-                    buttons = ji.dwButtons
-                    for b in range(16):
-                        if buttons & (1 << b):
-                            inputs.add(f"Button {b + 1}")
+            # Solo interrogar dispositivos confirmados como conectados
+            if _WINMM_CONNECTED_DEVS:
+                ji = _JOYINFOEX()
+                ji.dwSize = ctypes.sizeof(_JOYINFOEX)
+                ji.dwFlags = 0xFF  # All flags
 
-                    # POV / Cruceta (0 = Arriba, 9000 = Derecha, 18000 = Abajo, 27000 = Izquierda)
-                    pov = ji.dwPOV
-                    if pov != 65535:
-                        if pov == 0 or (31500 <= pov <= 36000) or (0 <= pov <= 4500):
-                            inputs.add("D-Pad Up")
-                        if 13500 <= pov <= 22500:
-                            inputs.add("D-Pad Down")
-                        if 22500 <= pov <= 31500:
-                            inputs.add("D-Pad Left")
-                        if 4500 <= pov <= 13500:
-                            inputs.add("D-Pad Right")
+                for dev_id in _WINMM_CONNECTED_DEVS:
+                    if _WINMM_DLL.joyGetPosEx(dev_id, ctypes.byref(ji)) == 0:
+                        buttons = ji.dwButtons
+                        for b in range(16):
+                            if buttons & (1 << b):
+                                inputs.add(f"Button {b + 1}")
 
-                    # Ejes analógicos X e Y (centro ~32767)
-                    if ji.dwYpos < 16384: inputs.add("L-Stick Up")
-                    if ji.dwYpos > 49152: inputs.add("L-Stick Down")
-                    if ji.dwXpos < 16384: inputs.add("L-Stick Left")
-                    if ji.dwXpos > 49152: inputs.add("L-Stick Right")
+                        # POV / Cruceta (0 = Arriba, 9000 = Derecha, 18000 = Abajo, 27000 = Izquierda)
+                        pov = ji.dwPOV
+                        if pov != 65535:
+                            if pov == 0 or (31500 <= pov <= 36000) or (0 <= pov <= 4500):
+                                inputs.add("D-Pad Up")
+                            if 13500 <= pov <= 22500:
+                                inputs.add("D-Pad Down")
+                            if 22500 <= pov <= 31500:
+                                inputs.add("D-Pad Left")
+                            if 4500 <= pov <= 13500:
+                                inputs.add("D-Pad Right")
 
-                    if inputs:
-                        break
+                        # Ejes analógicos X e Y (centro ~32767)
+                        if ji.dwYpos < 16384: inputs.add("L-Stick Up")
+                        if ji.dwYpos > 49152: inputs.add("L-Stick Down")
+                        if ji.dwXpos < 16384: inputs.add("L-Stick Left")
+                        if ji.dwXpos > 49152: inputs.add("L-Stick Right")
+
+                        if inputs:
+                            break
         except Exception:
             pass
 
     return inputs
 
 
-class GamepadManager(QObject):
+class GamepadPollingThread(QThread):
     """
-    Monitor en segundo plano que sondea periódicamente los mandos/joysticks conectados
-    y despacha señales de acción para la interfaz de RetroShelf.
-    Soporta navegación con autorrepetición suave (repeat rate) en listas y ruletas.
+    Hilo de trabajo dedicado que sondea los mandos y joysticks fuera del hilo GUI,
+    eliminando por completo cualquier congelamiento o caída de FPS en el renderizado.
     """
-    action_triggered = Signal(str)  # Id de la acción disparada (ej: 'nav_up', 'select_game', etc.)
-    input_detected = Signal(str)    # Nombre del botón/combinación para diálogos de captura
+    action_triggered = Signal(str)
+    input_detected = Signal(str)
 
     def __init__(self, db=None, parent=None):
         super().__init__(parent)
         self.db = db
+        self._running = True
         self._enabled = True
-
-        # Temporizador de sondeo (~30ms = ~33 Hz, óptimo para respuesta y bajo uso de CPU)
-        self._timer = QTimer(self)
-        self._timer.setInterval(32)
-        self._timer.timeout.connect(self._poll_tick)
+        self._action_bindings: dict[str, str] = {}
+        self.refresh_bindings()
 
         # Estado previo de entradas para lógica de disparo y autorrepetición
         self._prev_inputs: set[str] = set()
         self._held_action: str | None = None
         self._held_ticks = 0
 
-        # Parámetros de repetición (en ticks de ~32ms):
-        # 10 ticks = ~320ms de retardo inicial antes de empezar a repetir
-        # 3 ticks = ~96ms entre repeticiones continuas al mantener presionado
-        self.INITIAL_REPEAT_TICKS = 10
-        self.CONTINUOUS_REPEAT_TICKS = 3
+        # Parámetros de repetición (en ticks de ~20ms):
+        # 16 ticks = ~320ms de retardo inicial antes de repetir
+        # 5 ticks = ~100ms entre repeticiones continuas al mantener presionado
+        self.INITIAL_REPEAT_TICKS = 16
+        self.CONTINUOUS_REPEAT_TICKS = 5
 
-        # Iniciar sondeo si hay soporte
-        if is_gamepad_supported():
-            self._timer.start()
+    def refresh_bindings(self):
+        """Precarga en memoria las asignaciones de botones para evitar consultas SQLite en caliente."""
+        check_order = [
+            ACTION_CLOSE_EMULATOR,
+            ACTION_NAV_UP,
+            ACTION_NAV_DOWN,
+            ACTION_NAV_LETTER,
+            ACTION_NAV_STEP5,
+            ACTION_SELECT,
+            ACTION_NAV_BACK,
+            ACTION_PAGE_UP,
+            ACTION_PAGE_DOWN,
+            ACTION_MUTE,
+        ]
+        bindings = {}
+        for act in check_order:
+            bindings[act] = get_gamepad_binding(self.db, act)
+        self._action_bindings = bindings
 
     def set_enabled(self, enabled: bool):
         self._enabled = enabled
@@ -198,90 +232,145 @@ class GamepadManager(QObject):
             self._held_action = None
             self._held_ticks = 0
 
+    def stop(self):
+        self._running = False
+        self.wait(300)
+
+    def _matches_action(self, pressed_inputs: set[str], action: str) -> bool:
+        """Evaluación puramente en memoria de asignaciones y alias."""
+        if not pressed_inputs:
+            return False
+        assigned = self._action_bindings.get(action)
+        if not assigned:
+            return False
+
+        if "+" in assigned:
+            parts = [p.strip() for p in assigned.split("+")]
+            if all(p in pressed_inputs for p in parts):
+                return True
+        elif assigned in pressed_inputs:
+            return True
+
+        default_pad = next((info.get("default_pad", "") for info in ACTIONS_INFO if info["id"] == action), "")
+        if assigned == default_pad and action in GAMEPAD_ACTION_ALIASES:
+            for alias in GAMEPAD_ACTION_ALIASES[action]:
+                if "+" in alias:
+                    parts = [p.strip() for p in alias.split("+")]
+                    if all(p in pressed_inputs for p in parts):
+                        return True
+                elif alias in pressed_inputs:
+                    return True
+        return False
+
+    def run(self):
+        while self._running:
+            if not self._enabled:
+                time.sleep(0.040)
+                continue
+
+            current_inputs = poll_raw_gamepad_inputs()
+            if not current_inputs:
+                self._prev_inputs.clear()
+                self._held_action = None
+                self._held_ticks = 0
+                time.sleep(0.020)
+                continue
+
+            # Emitir señal de captura en vivo si hay observadores (diálogo de configuración)
+            if "Back" in current_inputs and "Start" in current_inputs:
+                combo_name = "Back+Start"
+            else:
+                combo_name = next(iter(current_inputs))
+            self.input_detected.emit(combo_name)
+
+            # Comprobar qué acción coincide con las entradas activas
+            matched_action = None
+            if self._matches_action(current_inputs, ACTION_CLOSE_EMULATOR):
+                matched_action = ACTION_CLOSE_EMULATOR
+            else:
+                check_order = [
+                    ACTION_NAV_UP,
+                    ACTION_NAV_DOWN,
+                    ACTION_NAV_LETTER,
+                    ACTION_NAV_STEP5,
+                    ACTION_SELECT,
+                    ACTION_NAV_BACK,
+                    ACTION_PAGE_UP,
+                    ACTION_PAGE_DOWN,
+                    ACTION_MUTE,
+                ]
+                for act in check_order:
+                    if self._matches_action(current_inputs, act):
+                        matched_action = act
+                        break
+
+            if not matched_action:
+                self._held_action = None
+                self._held_ticks = 0
+                self._prev_inputs = current_inputs
+                time.sleep(0.020)
+                continue
+
+            # Distinguir entre acciones navegables continuas y acciones de un solo toque
+            repeatable_actions = {
+                ACTION_NAV_UP, ACTION_NAV_DOWN,
+                ACTION_PAGE_UP, ACTION_PAGE_DOWN
+            }
+
+            if matched_action in repeatable_actions:
+                if matched_action == self._held_action:
+                    self._held_ticks += 1
+                    if self._held_ticks >= self.INITIAL_REPEAT_TICKS:
+                        if (self._held_ticks - self.INITIAL_REPEAT_TICKS) % self.CONTINUOUS_REPEAT_TICKS == 0:
+                            self.action_triggered.emit(matched_action)
+                else:
+                    self._held_action = matched_action
+                    self._held_ticks = 0
+                    self.action_triggered.emit(matched_action)
+            else:
+                if matched_action != self._held_action:
+                    self._held_action = matched_action
+                    self._held_ticks = 0
+                    self.action_triggered.emit(matched_action)
+
+            self._prev_inputs = current_inputs
+            time.sleep(0.020)
+
+
+class GamepadManager(QObject):
+    """
+    Monitor en segundo plano que gestiona los mandos y joysticks conectados
+    mediante un hilo dedicado (QThread) y despacha señales seguras a través
+    de eventos Qt sin afectar la tasa de cuadros (FPS) del hilo principal de la interfaz.
+    """
+    action_triggered = Signal(str)  # Id de la acción disparada (ej: 'nav_up', 'select_game', etc.)
+    input_detected = Signal(str)    # Nombre del botón/combinación para diálogos de captura
+
+    def __init__(self, db=None, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self._worker = GamepadPollingThread(db=db)
+        self._worker.action_triggered.connect(self.action_triggered.emit)
+        self._worker.input_detected.connect(self.input_detected.emit)
+
+        # Iniciar sondeo si hay soporte
+        if is_gamepad_supported():
+            self._worker.start()
+
+    def set_enabled(self, enabled: bool):
+        self._worker.set_enabled(enabled)
+
     def start(self):
-        if is_gamepad_supported() and not self._timer.isActive():
-            self._timer.start()
+        if is_gamepad_supported() and not self._worker.isRunning():
+            self._worker.start()
 
     def stop(self):
-        if self._timer.isActive():
-            self._timer.stop()
+        if self._worker.isRunning():
+            self._worker.stop()
 
-    def _poll_tick(self):
-        if not self._enabled:
-            return
-
-        current_inputs = poll_raw_gamepad_inputs()
-        if not current_inputs:
-            self._prev_inputs.clear()
-            self._held_action = None
-            self._held_ticks = 0
-            return
-
-        # Emitir señal de captura en vivo si hay observadores (diálogo de configuración)
-        # Soporta combo Back+Start si ambos están presionados
-        if "Back" in current_inputs and "Start" in current_inputs:
-            combo_name = "Back+Start"
-        else:
-            combo_name = next(iter(current_inputs))
-        self.input_detected.emit(combo_name)
-
-        # Comprobar qué acción coincide con las entradas activas
-        matched_action = None
-
-        # Priorizar combo de cierre de emulador
-        if matches_gamepad_action(current_inputs, ACTION_CLOSE_EMULATOR, self.db):
-            matched_action = ACTION_CLOSE_EMULATOR
-        else:
-            # Comprobar el resto de acciones configuradas
-            check_order = [
-                ACTION_NAV_UP,
-                ACTION_NAV_DOWN,
-                ACTION_NAV_LETTER,
-                ACTION_NAV_STEP5,
-                ACTION_SELECT,
-                ACTION_NAV_BACK,
-                ACTION_PAGE_UP,
-                ACTION_PAGE_DOWN,
-                ACTION_MUTE,
-            ]
-            for act in check_order:
-                if matches_gamepad_action(current_inputs, act, self.db):
-                    matched_action = act
-                    break
-
-        if not matched_action:
-            self._held_action = None
-            self._held_ticks = 0
-            self._prev_inputs = current_inputs
-            return
-
-        # Distinguir entre acciones navegables continuas y acciones de salto por toque único
-        repeatable_actions = {
-            ACTION_NAV_UP, ACTION_NAV_DOWN,
-            ACTION_PAGE_UP, ACTION_PAGE_DOWN
-        }
-
-        if matched_action in repeatable_actions:
-            if matched_action == self._held_action:
-                self._held_ticks += 1
-                if self._held_ticks >= self.INITIAL_REPEAT_TICKS:
-                    # Período de repetición continua
-                    if (self._held_ticks - self.INITIAL_REPEAT_TICKS) % self.CONTINUOUS_REPEAT_TICKS == 0:
-                        self.action_triggered.emit(matched_action)
-            else:
-                # Primer pulsado
-                self._held_action = matched_action
-                self._held_ticks = 0
-                self.action_triggered.emit(matched_action)
-        else:
-            # Acciones de un solo toque (Select, Back, Mute, Close)
-            # Solo se disparan en el flanco ascendente (cuando la acción no estaba ya en ejecución)
-            if matched_action != self._held_action:
-                self._held_action = matched_action
-                self._held_ticks = 0
-                self.action_triggered.emit(matched_action)
-
-        self._prev_inputs = current_inputs
+    def refresh_bindings(self):
+        self._worker.db = self.db
+        self._worker.refresh_bindings()
 
 
 _GLOBAL_GAMEPAD_MANAGER: GamepadManager | None = None
@@ -291,6 +380,7 @@ def get_gamepad_manager(db=None) -> GamepadManager:
     global _GLOBAL_GAMEPAD_MANAGER
     if _GLOBAL_GAMEPAD_MANAGER is None:
         _GLOBAL_GAMEPAD_MANAGER = GamepadManager(db=db)
-    elif db is not None:
+    elif db is not None and _GLOBAL_GAMEPAD_MANAGER.db != db:
         _GLOBAL_GAMEPAD_MANAGER.db = db
+        _GLOBAL_GAMEPAD_MANAGER.refresh_bindings()
     return _GLOBAL_GAMEPAD_MANAGER
