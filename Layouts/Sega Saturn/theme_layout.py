@@ -636,41 +636,37 @@ class ThemeLayout(BaseLayout):
             }
         if not hasattr(self, "_art_pix_cache"):
             self._art_pix_cache = {}
-        box_file = self.current_media.get("boxart")
-        if not box_file and game.get("cover_path"):
-            box_file = game["cover_path"]
-        self._pending_box_file = box_file
-        self._current_box_pixmap = self._art_pix_cache.get(box_file) if box_file else None
+        box_file = self.current_media.get("boxart") or game.get("cover_path") or game.get("boxart_path")
+        self._pending_box_file = box_file if (box_file and os.path.isfile(box_file)) else None
 
-        cart_file = self.current_media.get("cartart")
-        self._pending_cart_file = cart_file
-        self._current_cart_pixmap = self._art_pix_cache.get(cart_file) if cart_file else None
+        cart_file = self.current_media.get("cartart") or self.current_media.get("discart") or game.get("cartart_path") or game.get("discart_path")
+        self._pending_cart_file = cart_file if (cart_file and os.path.isfile(cart_file)) else None
 
+        self._load_pending_art()
         self._play_current_video()
 
     def _load_pending_art(self):
         if not hasattr(self, "_art_pix_cache"):
             self._art_pix_cache = {}
-        if len(self._art_pix_cache) > 80:
+        if len(self._art_pix_cache) > 100:
             self._art_pix_cache.clear()
         b_file = getattr(self, "_pending_box_file", None)
-        if b_file:
+        if b_file and os.path.isfile(b_file):
             if b_file not in self._art_pix_cache:
-                p = QPixmap(b_file) if os.path.isfile(b_file) else QPixmap()
+                p = QPixmap(b_file)
                 self._art_pix_cache[b_file] = p if not p.isNull() else None
-            self._current_box_pixmap = self._art_pix_cache[b_file]
+            self._current_box_pixmap = self._art_pix_cache.get(b_file)
         else:
             self._current_box_pixmap = None
 
         c_file = getattr(self, "_pending_cart_file", None)
-        if c_file:
+        if c_file and os.path.isfile(c_file):
             if c_file not in self._art_pix_cache:
-                p = QPixmap(c_file) if os.path.isfile(c_file) else QPixmap()
+                p = QPixmap(c_file)
                 self._art_pix_cache[c_file] = p if not p.isNull() else None
-            self._current_cart_pixmap = self._art_pix_cache[c_file]
+            self._current_cart_pixmap = self._art_pix_cache.get(c_file)
         else:
             self._current_cart_pixmap = None
-
     def _play_current_video(self):
         self._init_player()
         video_file = self.current_media.get("snap")
@@ -773,6 +769,23 @@ class ThemeLayout(BaseLayout):
         ]
         if window:
             self._wheel_worker.queue_games(window)
+        # Preload adjacent boxart/cartart into cache for zero-lag immediate display
+        if not hasattr(self, "_art_pix_cache"):
+            self._art_pix_cache = {}
+        for off in (-2, -1, 1, 2, 3):
+            gm = self.games[(center_idx + off) % n]
+            gmedia = resolve_game_media(gm)
+            bf = gmedia.get("boxart") or gm.get("cover_path")
+            if bf and bf not in self._art_pix_cache and os.path.isfile(bf):
+                bp = QPixmap(bf)
+                if not bp.isNull():
+                    self._art_pix_cache[bf] = bp
+            cf = gmedia.get("cartart") or gmedia.get("discart")
+            if cf and cf not in self._art_pix_cache and os.path.isfile(cf):
+                cp = QPixmap(cf)
+                if not cp.isNull():
+                    self._art_pix_cache[cf] = cp
+
 
     def _preload_direction(self, steps: int):
         if not self.games or not hasattr(self, "_wheel_worker") or not self._wheel_worker:
@@ -960,7 +973,7 @@ class ThemeLayout(BaseLayout):
         disc_w = int(sw * cw)
         disc_h = int(sh * ch)
 
-        disc_pix = getattr(self, "_current_cart_pixmap", None) or self._pix_cartart_frame
+        disc_pix = getattr(self, "_current_cart_pixmap", None) if getattr(self, "_pending_cart_file", None) else self._pix_cartart_frame
 
         if disc_pix and not disc_pix.isNull():
             side = min(disc_w, disc_h)
@@ -987,7 +1000,7 @@ class ThemeLayout(BaseLayout):
         box_h = int(sh * self.BOXART_H)
         box_x = sx + int(sw * self.BOXART_X)
 
-        box_pix = getattr(self, "_current_box_pixmap", None) or self._pix_boxart_frame
+        box_pix = getattr(self, "_current_box_pixmap", None) if getattr(self, "_pending_box_file", None) else self._pix_boxart_frame
         if box_pix and not box_pix.isNull():
             pw = box_pix.width()
             ph = box_pix.height()

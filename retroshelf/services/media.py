@@ -126,7 +126,11 @@ def detect_media_folders(base_path: str | Path | None, media_root: str | Path | 
 
 def find_media_file(folder: str | Path | None, base_name: str, extensions: tuple[str, ...]) -> str | None:
     """Busca en memoria (O(1)) un archivo con base_name y alguna de las extensiones dentro de folder."""
-    if not folder or not base_name:
+    if not folder:
+        return None
+    if os.path.isfile(folder):
+        return str(folder)
+    if not base_name:
         return None
     file_map = _get_folder_index(folder)
     if not file_map:
@@ -155,6 +159,7 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
         "video": None,
         "snap": None,
         "cartart": None,
+        "discart": None,
         "cabinet": None,
         "marquee": None,
         "bezel": None,
@@ -212,10 +217,12 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
             media["video"] = v_found
             media["snap"] = v_found
 
-        # 4. Cart Art
-        cart_folder = row_dict.get("cartart_path")
+        # 4. Cart Art / Disc Art
+        cart_folder = row_dict.get("cartart_path") or row_dict.get("discart_path")
         if cart_folder:
-            media["cartart"] = find_media_file(cart_folder, stem, IMAGE_EXTS)
+            c_found = find_media_file(cart_folder, stem, IMAGE_EXTS)
+            media["cartart"] = c_found
+            media["discart"] = c_found
 
         # 5. Cabinet, Marquee y Bezel
         cab_folder = row_dict.get("cabinet_path")
@@ -276,13 +283,14 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
                     media["boxart"] = found
                     break
 
-        # 4. Cart Art
-        cart_folder = row_dict.get("menu_cartart_path") or row_dict.get("cartart_path")
+        # 4. Cart Art / Disc Art
+        cart_folder = row_dict.get("menu_cartart_path") or row_dict.get("cartart_path") or row_dict.get("discart_path")
         if cart_folder:
             for cand in candidates:
                 found = find_media_file(cart_folder, cand, IMAGE_EXTS)
                 if found:
                     media["cartart"] = found
+                    media["discart"] = found
                     break
 
     # Carátula personalizada asignada manualmente a un juego individual (games.cover_path)
@@ -290,6 +298,11 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
         c_path = row_dict.get("cover_path")
         if c_path and os.path.isfile(c_path):
             media["boxart"] = c_path
+
+    if not media["discart"] and media["cartart"]:
+        media["discart"] = media["cartart"]
+    elif not media["cartart"] and media["discart"]:
+        media["cartart"] = media["discart"]
 
     media["snap"] = media["video"]
     return media
