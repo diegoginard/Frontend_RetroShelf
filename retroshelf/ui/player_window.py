@@ -1,9 +1,11 @@
 import sys
 import os
+import time
+from collections import deque
 import subprocess
 from pathlib import Path
 import retroshelf
-from PySide6.QtCore import Qt, QPoint, QSize, QTimer
+from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QEvent
 from PySide6.QtGui import QFont, QKeySequence, QShortcut, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel,
@@ -67,12 +69,98 @@ class PlayerWindow(QMainWindow):
         self.layout_stack.setContentsMargins(0, 0, 0, 0)
         self.setCentralWidget(self.layout_stack)
 
+        # Contador de FPS en tiempo real (Overlay flotante con estilo Arcade)
+        self._frame_times = deque()
+        self.fps_label = QLabel(self)
+        self.fps_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.fps_label.setStyleSheet("""
+            background-color: rgba(12, 14, 20, 0.88);
+            color: #00ff88;
+            font-family: 'Consolas', 'Segoe UI', monospace;
+            font-size: 13px;
+            font-weight: bold;
+            padding: 5px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(0, 255, 136, 0.5);
+        """)
+        self.fps_label.setText("FPS: --")
+        self.fps_label.adjustSize()
+        self.fps_label.show()
+
+        # Timer para actualizar lectura de FPS cada 250ms
+        self._fps_timer = QTimer(self)
+        self._fps_timer.setInterval(250)
+        self._fps_timer.timeout.connect(self._update_fps_display)
+        self._fps_timer.start()
+
     def _setup_shortcuts(self):
-        # F11 para alternar pantalla completa si es necesario
+        # F11 para alternar pantalla completa
         QShortcut(QKeySequence(Qt.Key_F11), self, self.toggle_fullscreen)
+        # F10 y F3 para alternar el contador de FPS
+        QShortcut(QKeySequence(Qt.Key_F10), self, self.toggle_fps_counter)
+        QShortcut(QKeySequence(Qt.Key_F3), self, self.toggle_fps_counter)
         # Escape y Backspace para retroceder / salir
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.go_back)
         QShortcut(QKeySequence(Qt.Key_Backspace), self, self.go_back)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Paint:
+            now = time.perf_counter()
+            self._frame_times.append(now)
+            while self._frame_times and (now - self._frame_times[0]) > 1.0:
+                self._frame_times.popleft()
+        return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reposition_fps_label()
+
+    def _reposition_fps_label(self):
+        if hasattr(self, "fps_label") and self.fps_label:
+            self.fps_label.move(self.width() - self.fps_label.width() - 20, 20)
+            self.fps_label.raise_()
+
+    def _update_fps_display(self):
+        now = time.perf_counter()
+        while self._frame_times and (now - self._frame_times[0]) > 1.0:
+            self._frame_times.popleft()
+        count = len(self._frame_times)
+        if count >= 2:
+            dt = self._frame_times[-1] - self._frame_times[0]
+            fps = (count - 1) / dt if dt > 0 else 0.0
+            frame_ms = (dt / (count - 1)) * 1000.0
+        elif count == 1:
+            fps = 60.0
+            frame_ms = 16.6
+        else:
+            fps = 0.0
+            frame_ms = 0.0
+
+        if fps >= 55.0:
+            color = "#00ff88"
+        elif fps >= 30.0:
+            color = "#ffcc00"
+        else:
+            color = "#ff4444"
+
+        self.fps_label.setStyleSheet(f"""
+            background-color: rgba(12, 14, 20, 0.88);
+            color: {color};
+            font-family: 'Consolas', 'Segoe UI', monospace;
+            font-size: 13px;
+            font-weight: bold;
+            padding: 5px 12px;
+            border-radius: 8px;
+            border: 1px solid {color}88;
+        """)
+        self.fps_label.setText(f"{fps:.1f} FPS ({frame_ms:.1f} ms)")
+        self.fps_label.adjustSize()
+        self._reposition_fps_label()
+
+    def toggle_fps_counter(self):
+        """Muestra u oculta el contador de FPS en pantalla."""
+        if hasattr(self, "fps_label") and self.fps_label:
+            self.fps_label.setVisible(not self.fps_label.isVisible())
 
     def stop_all_active_media(self):
         """Detiene completamente cualquier reproducción activa en TODOS los layouts para evitar audio residual."""
@@ -285,26 +373,24 @@ class PlayerWindow(QMainWindow):
                     pass
             self.raise_()
             self.activateWindow()
-        else:
-            # Pantalla completa (fullscreen / borderless)
-            self.showNormal()
-            self.resize(w, h)
+        elif mode == "borderless":
+            # Pantalla completa sin bordes (Borderless): usa la geometría exacta del monitor sin mode-switch
+            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
             if geo:
-                try:
-                    self.move(geo.topLeft())
-                except Exception:
-                    pass
+                self.setGeometry(geo)
+            else:
+                self.resize(w, h)
+            self.show()
             self.raise_()
             self.activateWindow()
-
-            def _go_fullscreen():
-                try:
-                    if geo:
-                        self.move(geo.topLeft())
-                    self.showFullScreen()
-                except Exception:
-                    pass
-            QTimer.singleShot(150, _go_fullscreen)
+        else:
+            # Pantalla completa tradicional
+            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+            if geo:
+                self.setGeometry(geo)
+            self.showFullScreen()
+            self.raise_()
+            self.activateWindow()
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -361,6 +447,7 @@ class PlayerWindow(QMainWindow):
         inst.game_activated.connect(self._on_game_activated)
         if hasattr(inst, "nav_back_requested"):
             inst.nav_back_requested.connect(self.go_back)
+        inst.installEventFilter(self)
         self.active_layouts[layout_name] = inst
         self.layout_stack.addWidget(inst)
         return inst

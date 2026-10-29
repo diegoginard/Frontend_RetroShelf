@@ -784,7 +784,10 @@ class ThemeLayout(BaseLayout):
 
             # Capa 1: Fondo temático de Atari Jaguar
             if self._pix_bkg:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_bkg)
+                if getattr(self, "_cached_bkg_size", None) != (sw, sh):
+                    self._cached_bkg_pix = self._pix_bkg.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_bkg_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_bkg_pix)
 
             # Capa 2: Snap Video dentro del marco CRT
             vx, vy, vw, vh = self.TV_RECT
@@ -803,7 +806,10 @@ class ThemeLayout(BaseLayout):
 
             # Capa 4: Marco exterior de la TV CRT
             if self._pix_tv:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_tv)
+                if getattr(self, "_cached_tv_size", None) != (sw, sh):
+                    self._cached_tv_pix = self._pix_tv.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_tv_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_tv_pix)
 
             # Capa 5: Avatar (Mecha robot animado)
             self._draw_avatar(painter, sr)

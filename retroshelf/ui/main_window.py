@@ -1337,9 +1337,21 @@ class MainWindow(QMainWindow):
     def launch_frontend_player(self):
         """Lanza el reproductor Frontend a pantalla completa directamente desde el configurador."""
         self.stop_all_active_media()
+        if hasattr(self, "gamepad") and self.gamepad:
+            self.gamepad.set_enabled(False)
+        self.hide()
         from retroshelf.ui.player_window import PlayerWindow
         self.player_window = PlayerWindow(parent=None)
         self.player_window.apply_video_settings()
+
+        def _on_player_closed():
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            if hasattr(self, "gamepad") and self.gamepad:
+                self.gamepad.set_enabled(True)
+
+        self.player_window.destroyed.connect(_on_player_closed)
         QTimer.singleShot(0, self.player_window._apply_show)
 
     def stop_all_active_media(self):

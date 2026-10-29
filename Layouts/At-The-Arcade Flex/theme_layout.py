@@ -325,6 +325,7 @@ class ThemeLayout(BaseLayout):
                     self.game_player.play()
             else:
                 if self.game_audio:
+                    self.game_audio.setMuted(True)
                     try:
                         self.game_audio.setMuted(True)
                         self.game_audio.setVolume(0.0)
@@ -716,7 +717,10 @@ class ThemeLayout(BaseLayout):
         if self._bg_video_image:
             painter.drawImage(QRect(0, 0, w, h), self._bg_video_image)
         elif self._pix_bg_fallback:
-            painter.drawPixmap(QRect(0, 0, w, h), self._pix_bg_fallback)
+            if not hasattr(self, "_cached_bg_pix") or getattr(self, "_cached_bg_size", None) != (w, h):
+                self._cached_bg_pix = self._pix_bg_fallback.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                self._cached_bg_size = (w, h)
+            painter.drawPixmap(0, 0, self._cached_bg_pix)
         else:
             painter.fillRect(QRect(0, 0, w, h), QColor(10, 8, 16))
 
@@ -776,20 +780,32 @@ class ThemeLayout(BaseLayout):
 
         # Capa de reflejo / vidrio rayado CRT sobre el monitor
         if self._pix_scratches:
+            s_size = (snap_rect.width(), snap_rect.height())
+            if not hasattr(self, "_cached_scratches_pix") or getattr(self, "_cached_scratches_size", None) != s_size:
+                self._cached_scratches_pix = self._pix_scratches.scaled(snap_rect.width(), snap_rect.height(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                self._cached_scratches_size = s_size
             painter.setOpacity(0.40)
-            painter.drawPixmap(snap_rect, self._pix_scratches)
+            painter.drawPixmap(snap_rect.x(), snap_rect.y(), self._cached_scratches_pix)
             painter.setOpacity(1.0)
 
         # 3. MARQUEE (Capa trasera de la marquesina)
         pix_marq = self._current_marquee_pix
         if pix_marq:
-            painter.drawPixmap(marquee_rect, pix_marq)
+            marq_key = (id(pix_marq), marquee_rect.width(), marquee_rect.height())
+            if not hasattr(self, "_cached_marq_pix") or getattr(self, "_cached_marq_key", None) != marq_key:
+                self._cached_marq_pix = pix_marq.scaled(marquee_rect.width(), marquee_rect.height(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                self._cached_marq_key = marq_key
+            painter.drawPixmap(marquee_rect.x(), marquee_rect.y(), self._cached_marq_pix)
             painter.fillRect(marquee_rect, QColor(255, 255, 255, 25))
 
         # 4. MUEBLE ARCADE FRONTAL (Capa frontal con huecos transparentes)
         pix_cab = self._current_cabinet_pix or self._pix_cabinet
         if pix_cab:
-            painter.drawPixmap(QRect(cab_x, cab_y, cab_w, cab_h), pix_cab)
+            cab_key = (id(pix_cab), cab_w, cab_h)
+            if not hasattr(self, "_cached_cab_pix") or getattr(self, "_cached_cab_key", None) != cab_key:
+                self._cached_cab_pix = pix_cab.scaled(cab_w, cab_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                self._cached_cab_key = cab_key
+            painter.drawPixmap(cab_x, cab_y, self._cached_cab_pix)
 
         # 5. FLYER DEL JUEGO (Lado derecho de la pantalla)
         self._draw_flyer(painter, w, h)
@@ -890,15 +906,19 @@ class ThemeLayout(BaseLayout):
                 ly = logo_rect.y() + (logo_rect.height() - dh) // 2
                 painter.drawPixmap(QRect(lx, ly, dw, dh), pix_logo)
                 painter.setOpacity(self._wheel_alpha / 255.0)
-            else:
-                # Fallback de texto si el juego no tiene clearlogo
-                painter.setOpacity((alpha / 255.0) * (self._wheel_alpha / 255.0))
-                title = game.get("title") or "Arcade Game"
-                f_title = QFont(self._font_bebas, max(12, int(slot_h * 0.32)), QFont.Bold)
-                painter.setFont(f_title)
-                painter.setPen(QColor(255, 230, 100) if is_center else QColor(220, 220, 220))
-                painter.drawText(logo_rect, Qt.AlignCenter | Qt.TextWordWrap, title.upper())
-                painter.setOpacity(self._wheel_alpha / 255.0)
+
+    def _create_text_wheel_pixmap(self, title: str) -> QPixmap:
+        """Crea un logotipo tipográfico estilizado en memoria y lo cachea para no recalcular texto cada frame."""
+        pix = QPixmap(400, 160)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        f_title = QFont(self._font_bebas, 24, QFont.Bold)
+        p.setFont(f_title)
+        p.setPen(QColor(240, 240, 240))
+        p.drawText(pix.rect(), Qt.AlignCenter | Qt.TextWordWrap, (title or "Arcade Game").upper())
+        p.end()
+        return pix
 
     def _get_wheel_pixmap(self, game: dict) -> QPixmap | None:
         gid = game.get("id")
@@ -910,6 +930,9 @@ class ThemeLayout(BaseLayout):
         pix = self._load_pixmap(w_file)
         if pix and (pix.width() > 480 or pix.height() > 240):
             pix = pix.scaled(480, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if not pix:
+            title = game.get("title") or "Arcade Game"
+            pix = self._create_text_wheel_pixmap(title)
         self._wheel_pixmaps[gid] = pix
         return pix
 

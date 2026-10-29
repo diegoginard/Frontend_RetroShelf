@@ -771,7 +771,10 @@ class ThemeLayout(BaseLayout):
 
             # Capa 1: Fondo escénico
             if self._pix_bkg:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_bkg)
+                if getattr(self, "_cached_bkg_size", None) != (sw, sh):
+                    self._cached_bkg_pix = self._pix_bkg.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_bkg_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_bkg_pix)
             else:
                 painter.fillRect(sr, QColor(10, 10, 18))
 
@@ -785,8 +788,7 @@ class ThemeLayout(BaseLayout):
             painter.save()
             painter.fillRect(tv_snap_x, tv_snap_y, tv_snap_w, tv_snap_h, QColor(0, 0, 0))
             if self._current_video_image:
-                pix = QPixmap.fromImage(self._current_video_image)
-                painter.drawPixmap(tv_snap_x, tv_snap_y, tv_snap_w, tv_snap_h, pix)
+                painter.drawImage(QRect(tv_snap_x, tv_snap_y, tv_snap_w, tv_snap_h), self._current_video_image)
             painter.restore()
 
             # Capa 3: Scanlines CRT
@@ -798,7 +800,10 @@ class ThemeLayout(BaseLayout):
 
             # Capa 4: Marco de la TV
             if self._pix_tv:
-                painter.drawPixmap(sx, sy, sw, sh, self._pix_tv)
+                if getattr(self, "_cached_tv_size", None) != (sw, sh):
+                    self._cached_tv_pix = self._pix_tv.scaled(sw, sh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                    self._cached_tv_size = (sw, sh)
+                painter.drawPixmap(sx, sy, self._cached_tv_pix)
 
             # Capa 5: Avatar (Mascota)
             self._draw_avatar(painter, sr)
