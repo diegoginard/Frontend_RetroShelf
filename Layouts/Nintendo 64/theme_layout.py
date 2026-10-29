@@ -20,7 +20,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink, QSoundEffect
 
-from retroshelf.ui.layouts.base import BaseLayout
+from retroshelf.ui.layouts.base import BaseLayout, WheelPreloadWorker
 from retroshelf.services.media import resolve_game_media
 from retroshelf.ui.cover_utils import load_cover
 from retroshelf.services.controls import (
@@ -149,6 +149,11 @@ class ThemeLayout(BaseLayout):
         self._wheel_pixmaps = {}
         self._current_box_pixmap = None
         self._current_cart_pixmap = None
+
+        # Worker en segundo plano para pre-carga asíncrona de logotipos de rueda
+        self._wheel_worker = WheelPreloadWorker(self)
+        self._wheel_worker.wheel_loaded.connect(self._on_wheel_image_loaded)
+        self._wheel_worker.start()
 
         self._player_initialized = False
         self.player = None
@@ -358,6 +363,8 @@ class ThemeLayout(BaseLayout):
         if n == 0 or delta_steps == 0:
             return
 
+        self._preload_direction(delta_steps)
+
         self.selected_index = (self.selected_index + delta_steps) % n
         self._wheel_spin_offset += float(delta_steps)
         self._wheel_spin_offset = max(-5.0, min(5.0, self._wheel_spin_offset))
@@ -529,11 +536,14 @@ class ThemeLayout(BaseLayout):
         self.games = [dict(g) if hasattr(g, "keys") else g for g in games]
         self.selected_index = 0
         self._wheel_pixmaps.clear()
+        if hasattr(self, '_wheel_worker') and self._wheel_worker:
+            self._wheel_worker.clear()
         if self.games:
             self._update_current_selection()
             self._start_cart_animation()
             self._start_boxart_animation()
             self._start_logo_animation()
+            self._preload_around(0)
         else:
             self.current_media = {}
             self._current_box_pixmap = None
@@ -554,6 +564,7 @@ class ThemeLayout(BaseLayout):
                     self._update_current_selection()
                     self._start_cart_animation()
                     self._start_boxart_animation()
+                    self._preload_around(i)
                     self.update()
                 break
 
@@ -706,26 +717,64 @@ class ThemeLayout(BaseLayout):
             self._current_video_image = None
             self.update()
 
+    def _on_wheel_image_loaded(self, gid: int, img: QImage):
+        if not img.isNull():
+            pix = QPixmap.fromImage(img)
+            self._wheel_pixmaps[gid] = pix
+            if len(self._wheel_pixmaps) > 600:
+                for old_gid in list(self._wheel_pixmaps.keys()):
+                    if not self._is_game_visible_in_wheel(old_gid):
+                        del self._wheel_pixmaps[old_gid]
+                        break
+            if self._is_game_visible_in_wheel(gid):
+                self.update()
+
+    def _is_game_visible_in_wheel(self, game_id: int) -> bool:
+        if not self.games:
+            return False
+        n = len(self.games)
+        for offset in (-6, 6, -5, 5, -4, 4, -3, 3, -2, 2, -1, 1, 0):
+            idx = (self.selected_index + offset) % n
+            if self.games[idx].get("id") == game_id:
+                return True
+        return False
+
+    def _preload_around(self, center_idx: int):
+        if not self.games or not hasattr(self, "_wheel_worker") or not self._wheel_worker:
+            return
+        n = len(self.games)
+        window = [
+            self.games[(center_idx + i) % n]
+            for i in range(-6, 35)
+            if self.games[(center_idx + i) % n].get("id") not in self._wheel_pixmaps
+        ]
+        if window:
+            self._wheel_worker.queue_games(window)
+
+    def _preload_direction(self, steps: int):
+        if not self.games or not hasattr(self, "_wheel_worker") or not self._wheel_worker:
+            return
+        n = len(self.games)
+        direction = 1 if steps > 0 else -1
+        start = self.selected_index
+        count = 30 if abs(steps) <= 1 else 50
+        window = [
+            self.games[(start + (i * direction)) % n]
+            for i in range(1, count + 1)
+            if self.games[(start + (i * direction)) % n].get("id") not in self._wheel_pixmaps
+        ]
+        if window:
+            self._wheel_worker.queue_games(window, priority=True)
+
     def _get_game_wheel_pixmap(self, game: dict) -> QPixmap | None:
         gid = game.get("id")
         if gid in self._wheel_pixmaps:
             return self._wheel_pixmaps[gid]
 
-        wheel_path = None
-        media = resolve_game_media(game)
-        if media.get("wheel"):
-            wheel_path = media["wheel"]
-        elif game.get("wheel_path"):
-            wheel_path = game["wheel_path"]
+        if hasattr(self, "_wheel_worker") and self._wheel_worker:
+            self._wheel_worker.queue_game(game, priority=True)
 
-        pix = None
-        if wheel_path and os.path.isfile(wheel_path):
-            p = QPixmap(wheel_path)
-            if not p.isNull():
-                pix = p
-
-        self._wheel_pixmaps[gid] = pix
-        return pix
+        return None
 
     def _get_target_rect(self) -> QRect:
         w = self.width()
@@ -1150,3 +1199,21 @@ class ThemeLayout(BaseLayout):
     def showEvent(self, event):
         super().showEvent(event)
         self._start_logo_animation()
+
+    def closeEvent(self, event):
+        self.stop_media()
+        if hasattr(self, "_wheel_worker") and self._wheel_worker:
+            self._wheel_worker.stop()
+        if event is not None:
+            super().closeEvent(event)
+
+    def clear(self):
+        self._wheel_spin_offset = 0.0
+        if hasattr(self, '_wheel_spin_timer') and self._wheel_spin_timer.isActive():
+            self._wheel_spin_timer.stop()
+        self._current_video_image = None
+        self.stop_media()
+        super().clear()
+        self._wheel_pixmaps.clear()
+        if hasattr(self, '_wheel_worker') and self._wheel_worker:
+            self._wheel_worker.clear()

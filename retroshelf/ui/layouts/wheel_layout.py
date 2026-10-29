@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QStyle
 )
 
-from retroshelf.ui.layouts.base import BaseLayout
+from retroshelf.ui.layouts.base import BaseLayout, WheelPreloadWorker
 from retroshelf.services.media import resolve_game_media, find_media_file, IMAGE_EXTS
 from retroshelf.ui.cover_utils import load_cover
 from retroshelf.services.controls import (
@@ -24,12 +24,15 @@ class WheelItemDelegate(QStyledItemDelegate):
     Delegado que dibuja cada elemento de la Rueda (Wheel).
     Muestra el logo transparente (.png) de Wheel del juego, o un banner estilizado si no existe logo.
     """
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, wheel_worker=None):
         super().__init__(parent)
+        self._wheel_worker = wheel_worker
         self._wheel_cache = {}  # game_id -> QPixmap or None
+        self._scaled_cache = {} # (game_id, is_selected, max_w, max_h) -> QPixmap
 
     def invalidate_cache(self):
         self._wheel_cache.clear()
+        self._scaled_cache.clear()
 
     def sizeHint(self, option, index):
         return QSize(260, 70)
@@ -82,27 +85,15 @@ class WheelItemDelegate(QStyledItemDelegate):
             painter.setPen(QPen(border_color, border_width))
             painter.drawPath(path)
 
-            # Obtener o resolver imagen de Wheel Logo (búsqueda O(1) en memoria solo para wheel)
+            # Obtener o encolar imagen de Wheel Logo sin bloquear jamás el hilo de la UI
             if game_id not in self._wheel_cache:
-                wheel_file = None
-                if game.get("is_menu_target"):
-                    media = resolve_game_media(game.get("rom_path", ""), game)
-                    wheel_file = media.get("wheel")
-                else:
-                    w_folder = game.get("wheel_path")
-                    rom_p = game.get("rom_path", "")
-                    stem = game.get("rom_name") or (Path(rom_p).stem if rom_p else "")
-                    if w_folder and stem:
-                        wheel_file = find_media_file(w_folder, stem, IMAGE_EXTS)
-                if wheel_file and os.path.isfile(wheel_file):
-                    pix = QPixmap(wheel_file)
-                    self._wheel_cache[game_id] = pix if not pix.isNull() else None
-                else:
-                    self._wheel_cache[game_id] = None
+                if self._wheel_worker:
+                    self._wheel_worker.queue_game(game, priority=True)
+                self._wheel_cache[game_id] = None
 
-            wheel_pix = self._wheel_cache[game_id]
+            wheel_pix = self._wheel_cache.get(game_id)
 
-            if wheel_pix:
+            if wheel_pix and not wheel_pix.isNull():
                 # Dibujar el logo wheel centrado manteniendo proporción (+20% si está seleccionado)
                 if is_selected:
                     max_w = int((card_rect.width() - 16) * 1.20)
@@ -110,7 +101,15 @@ class WheelItemDelegate(QStyledItemDelegate):
                 else:
                     max_w = card_rect.width() - 24
                     max_h = card_rect.height() - 16
-                scaled = wheel_pix.scaled(QSize(max_w, max_h), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+                cache_key = (game_id, is_selected, max_w, max_h)
+                scaled = self._scaled_cache.get(cache_key)
+                if not scaled or scaled.isNull():
+                    scaled = wheel_pix.scaled(QSize(max_w, max_h), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    if len(self._scaled_cache) > 400:
+                        self._scaled_cache.clear()
+                    self._scaled_cache[cache_key] = scaled
+
                 draw_x = card_rect.x() + (card_rect.width() - scaled.width()) // 2
                 draw_y = card_rect.y() + (card_rect.height() - scaled.height()) // 2
                 painter.drawPixmap(draw_x, draw_y, scaled)
@@ -284,7 +283,13 @@ class WheelLayout(BaseLayout):
         """)
         self.wheel_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.wheel_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.delegate = WheelItemDelegate(self)
+
+        # Worker en segundo plano para pre-carga asíncrona de logotipos de rueda
+        self._wheel_worker = WheelPreloadWorker(self, max_w=360, max_h=120)
+        self._wheel_worker.wheel_loaded.connect(self._on_wheel_image_loaded)
+        self._wheel_worker.start()
+
+        self.delegate = WheelItemDelegate(self, wheel_worker=self._wheel_worker)
         self.wheel_list.setItemDelegate(self.delegate)
 
         self.wheel_list.currentItemChanged.connect(self._on_wheel_item_changed)
@@ -302,6 +307,13 @@ class WheelLayout(BaseLayout):
         self.video_timer.setSingleShot(True)
         self.video_timer.setInterval(160)
         self.video_timer.timeout.connect(self._start_video)
+
+        # Timer para diferir la carga en disco de artes pesadas (boxart/video) durante el scroll rápido
+        self._art_timer = QTimer(self)
+        self._art_timer.setSingleShot(True)
+        self._art_timer.setInterval(120)
+        self._art_timer.timeout.connect(self._load_pending_art)
+        self._pending_art_game = None
 
         self._video_watchdog_timer = QTimer(self)
         self._video_watchdog_timer.setSingleShot(True)
@@ -409,6 +421,38 @@ class WheelLayout(BaseLayout):
             self.current_game_id = self.games[0].get("id") if self.games else None
         self.render_games()
 
+    def _on_wheel_image_loaded(self, gid: int, img):
+        if not img.isNull():
+            pix = QPixmap.fromImage(img)
+            self.delegate._wheel_cache[gid] = pix
+            if self.isVisible():
+                self.wheel_list.viewport().update()
+
+    def _preload_around(self, center_row: int):
+        if not self.games or not hasattr(self, "_wheel_worker") or not self._wheel_worker:
+            return
+        n = len(self.games)
+        window = [
+            self.games[i] for i in range(max(0, center_row - 10), min(n, center_row + 35))
+            if self.games[i].get("id") not in self.delegate._wheel_cache
+        ]
+        if window:
+            self._wheel_worker.queue_games(window)
+
+    def _preload_direction(self, direction: int):
+        if not self.games or not hasattr(self, "_wheel_worker") or not self._wheel_worker:
+            return
+        curr = self.wheel_list.currentRow()
+        n = len(self.games)
+        count = 30
+        window = [
+            self.games[curr + (i * direction)]
+            for i in range(1, count + 1)
+            if 0 <= curr + (i * direction) < n and self.games[curr + (i * direction)].get("id") not in self.delegate._wheel_cache
+        ]
+        if window:
+            self._wheel_worker.queue_games(window, priority=True)
+
     def render_games(self):
         if self.player:
             try:
@@ -419,6 +463,9 @@ class WheelLayout(BaseLayout):
             self.video_timer.stop()
 
         self.delegate.invalidate_cache()
+        if hasattr(self, "_wheel_worker") and self._wheel_worker:
+            self._wheel_worker.clear()
+        self._preload_around(0)
         self.wheel_list.blockSignals(True)
         self.wheel_list.setUpdatesEnabled(False)
         self.wheel_list.clear()
@@ -467,6 +514,7 @@ class WheelLayout(BaseLayout):
             self.wheel_list.blockSignals(True)
             self.wheel_list.setCurrentItem(target_item)
             self.wheel_list.blockSignals(False)
+            self._preload_around(self.wheel_list.row(target_item))
             self._update_game_display(target_item.data(Qt.UserRole + 10))
         else:
             self._clear_game_display()
@@ -492,6 +540,12 @@ class WheelLayout(BaseLayout):
             return
         game = current.data(Qt.UserRole + 10)
         if game:
+            row = self.wheel_list.row(current)
+            if previous:
+                diff = row - self.wheel_list.row(previous)
+                if diff != 0:
+                    self._preload_direction(1 if diff > 0 else -1)
+            self._preload_around(row)
             self.current_game_id = game.get("id")
             self.game_selected.emit(self.current_game_id)
             self._update_game_display(game)
@@ -525,6 +579,36 @@ class WheelLayout(BaseLayout):
                 f"<br>Archivo: <span style='color:#6d7b93;'>{filename}</span>"
             )
 
+        # Detener video previo y diferir la lectura en disco de artes pesadas (boxart/logo/video)
+        self._want_video_playing = False
+        if hasattr(self, "_video_watchdog_timer"):
+            self._video_watchdog_timer.stop()
+        if self.audio_output:
+            try:
+                self.audio_output.setMuted(True)
+                self.audio_output.setVolume(0.0)
+            except Exception:
+                pass
+        if self.player:
+            try:
+                self.player.pause()
+            except Exception:
+                pass
+        if hasattr(self, "video_timer"):
+            self.video_timer.stop()
+
+        self._pending_art_game = game
+        if hasattr(self, "_art_timer"):
+            self._art_timer.start(120)
+
+    def _load_pending_art(self):
+        game = getattr(self, "_pending_art_game", None)
+        if not game:
+            return
+
+        title = game.get("title", "")
+        plat = game.get("platform") or "Retro"
+
         # Resolver medios (boxart, wheel, video)
         rom_path = game.get("rom_path", "")
         self.current_media = resolve_game_media(rom_path, game)
@@ -557,32 +641,14 @@ class WheelLayout(BaseLayout):
             self.wheel_logo_label.setVisible(False)
 
         # 3. Video Snap — solo si el player ya fue inicializado
-        self._want_video_playing = False
-        if hasattr(self, "_video_watchdog_timer"):
-            self._video_watchdog_timer.stop()
-        if self.audio_output:
-            try:
-                self.audio_output.setMuted(True)
-                self.audio_output.setVolume(0.0)
-            except Exception:
-                pass
-        if self.player:
-            try:
-                self.player.pause()
-            except Exception:
-                pass
-        if hasattr(self, "video_timer"):
-            self.video_timer.stop()
-
         video_file = self.current_media.get("video")
         if video_file and os.path.isfile(video_file):
             if self._player_initialized and self.player:
                 self.video_timer.start()
             else:
-                # Player aún no listo: se reproducirá automáticamente al inicializar
                 self._video_stack.setCurrentIndex(0)
         else:
-            self._video_stack.setCurrentIndex(0)  # mostrar placeholder
+            self._video_stack.setCurrentIndex(0)
             if self.player:
                 try:
                     self.player.stop()
@@ -643,11 +709,13 @@ class WheelLayout(BaseLayout):
                 event.accept()
                 return
         elif matches_action(event, ACTION_NAV_UP, getattr(self, "db", None)):
+            self._preload_direction(-1)
             row = max(0, self.wheel_list.currentRow() - 1)
             self.wheel_list.setCurrentRow(row)
             event.accept()
             return
         elif matches_action(event, ACTION_NAV_DOWN, getattr(self, "db", None)):
+            self._preload_direction(1)
             row = min(self.wheel_list.count() - 1, self.wheel_list.currentRow() + 1)
             self.wheel_list.setCurrentRow(row)
             event.accept()
@@ -709,3 +777,10 @@ class WheelLayout(BaseLayout):
         # Detener video al salir o cambiar de pestaña para liberar recursos
         self.stop_media()
         super().hideEvent(event)
+
+    def closeEvent(self, event):
+        self.stop_media()
+        if hasattr(self, "_wheel_worker") and self._wheel_worker:
+            self._wheel_worker.stop()
+        if event is not None:
+            super().closeEvent(event)

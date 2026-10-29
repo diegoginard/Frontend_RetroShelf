@@ -5,6 +5,7 @@ from retroshelf.services.controls import (
     matches_action, ACTION_NAV_LETTER, ACTION_NAV_STEP5,
     ACTION_PAGE_UP, ACTION_PAGE_DOWN
 )
+from retroshelf.ui.layouts.wheel_worker import WheelPreloadWorker
 
 class BaseLayout(QWidget):
     """
