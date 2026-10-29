@@ -374,23 +374,15 @@ class ThemeLayout(BaseLayout):
     def _on_bg_frame(self, frame):
         if not frame.isValid():
             return
-        # Si la ruleta está en movimiento, no bloquear el hilo de la UI extrayendo frames pesados de fondo
-        is_moving = abs(self._target_pos - self._current_pos) > 0.01 or (time.perf_counter() - getattr(self, "_last_nav_time", 0.0) < 0.25)
+        # Si la ruleta está en giro activo, no congelar el hilo de la UI extrayendo frames pesados de fondo
+        is_moving = abs(self._target_pos - self._current_pos) > 0.01 or (time.perf_counter() - getattr(self, "_last_nav_time", 0.0) < 0.20)
         if is_moving and getattr(self, "_bg_video_pix", None) is not None:
             return
 
-        now = time.perf_counter()
-        if now - getattr(self, "_last_bg_frame_time", 0.0) < 0.040:  # Cap a 25 FPS para fondo
-            return
-        self._last_bg_frame_time = now
-
         img = frame.toImage()
         if not img.isNull():
-            w, h = self.width(), self.height()
-            if w > 0 and h > 0 and (img.width() != w or img.height() != h):
-                self._bg_video_pix = QPixmap.fromImage(img).scaled(w, h, Qt.IgnoreAspectRatio, Qt.FastTransformation)
-            else:
-                self._bg_video_pix = QPixmap.fromImage(img)
+            # Conservar resolución nativa original (1920x1080) sin degradación ni pixelado por vecino más próximo
+            self._bg_video_pix = QPixmap.fromImage(img)
             self._bg_video_image = img
             if not is_moving:
                 self.update()
@@ -629,8 +621,15 @@ class ThemeLayout(BaseLayout):
         self.selected_index = 0
         self._current_pos = 0.0
         self._target_pos = 0.0
-        self._preload_around(0)
-        self._play_debounced_video()
+        if self.games:
+            self._preload_around(0)
+            self._update_current_selection(start_video=True)
+        else:
+            self.current_media = {}
+            self._current_marquee_pix = self._pix_marquee_default
+            self._current_cabinet_pix = self._pix_cabinet
+            self._current_bezel_pix = None
+            self.stop_media()
         self.update()
 
     def select_game_by_id(self, game_id: int):
@@ -640,8 +639,7 @@ class ThemeLayout(BaseLayout):
                 self._current_pos = float(idx)
                 self._target_pos = float(idx)
                 self._preload_around(idx)
-                self._play_debounced_video()
-                self._reset_wheel_fade()
+                self._update_current_selection(start_video=True)
                 self.update()
                 break
 
@@ -671,10 +669,35 @@ class ThemeLayout(BaseLayout):
         self._game_video_image = None
         self.update()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._init_bg_player()
+        if self.bg_player and self.bg_player.playbackState() != QMediaPlayer.PlayingState:
+            self.bg_player.play()
+        if self.games and 0 <= self.selected_index < len(self.games):
+            self._update_current_selection(start_video=True)
+            self._reset_wheel_fade()
+        self.update()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.stop_media()
+        if getattr(self, "bg_player", None):
+            try:
+                self.bg_player.pause()
+            except Exception:
+                pass
+
     def closeEvent(self, event):
         if hasattr(self, "_wheel_worker") and self._wheel_worker:
             self._wheel_worker.stop()
         self.stop_media()
+        if getattr(self, "bg_player", None):
+            try:
+                self.bg_player.stop()
+                self.bg_player.setSource(QUrl())
+            except Exception:
+                pass
         if event is not None:
             super().closeEvent(event)
 
@@ -885,18 +908,50 @@ class ThemeLayout(BaseLayout):
         self._video_watchdog_timer.stop()
         self._video_debounce_timer.start()
 
-    def _play_debounced_video(self):
-        if not self.isVisible() or not self.games or not (0 <= self.selected_index < len(self.games)):
+    def _update_current_selection(self, start_video: bool = True):
+        if not self.games or not (0 <= self.selected_index < len(self.games)):
+            self.current_media = {}
+            self._current_marquee_pix = self._pix_marquee_default
+            self._current_cabinet_pix = self._pix_cabinet
+            self._current_bezel_pix = None
+            self.stop_media()
             return
 
         current_game = self.games[self.selected_index]
+        gid = current_game.get("id")
+        self.current_game_id = gid
+        if gid is not None:
+            self.game_selected.emit(gid)
+
         self.current_media = self._resolve_game_media(current_game)
         self._load_current_game_art()
-        self._flyer_delay_timer.start(1500)
+
+        # Cargar de inmediato el logotipo wheel del juego seleccionado si no está en RAM
+        if gid and gid not in self._wheel_pixmaps:
+            w_file = self.current_media.get("wheel")
+            if not w_file:
+                w_folder = current_game.get("wheel_path")
+                stem = Path(current_game.get("rom_path", "")).stem if current_game.get("rom_path") else ""
+                if w_folder and stem:
+                    w_file = self._find_media_file(w_folder, stem, ('.png', '.jpg', '.jpeg', '.webp'))
+            if w_file and os.path.isfile(w_file):
+                p = QPixmap(w_file)
+                if not p.isNull():
+                    self._wheel_pixmaps[gid] = p
+
+        self._reset_wheel_fade()
+
+        if start_video:
+            self._start_game_video()
         self.update()
 
-        video_path = self.current_media.get("video")
+    def _start_game_video(self):
+        if not self.games or not (0 <= self.selected_index < len(self.games)):
+            return
+        video_path = self.current_media.get("video") if self.current_media else None
         self._pending_video_path = video_path
+        if not self.isVisible():
+            return
         if video_path and os.path.isfile(video_path):
             self._init_game_player()
             if self.game_player:
@@ -929,7 +984,11 @@ class ThemeLayout(BaseLayout):
                 except Exception:
                     pass
             self._game_video_image = None
-            self.update()
+        self.update()
+
+    def _play_debounced_video(self):
+        self._update_current_selection(start_video=True)
+        self._flyer_delay_timer.start(1500)
 
     # -------------------------------------------------------------------------
     # RENDERIZADO VISUAL A 60 FPS
