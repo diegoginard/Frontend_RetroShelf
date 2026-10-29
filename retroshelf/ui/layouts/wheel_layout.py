@@ -14,7 +14,8 @@ from retroshelf.ui.layouts.base import BaseLayout
 from retroshelf.services.media import resolve_game_media, find_media_file, IMAGE_EXTS
 from retroshelf.ui.cover_utils import load_cover
 from retroshelf.services.controls import (
-    matches_action, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_SELECT, ACTION_MUTE, ACTION_NAV_BACK
+    matches_action, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_SELECT, ACTION_MUTE, ACTION_NAV_BACK,
+    ACTION_NAV_LETTER, ACTION_NAV_STEP5, ACTION_PAGE_UP, ACTION_PAGE_DOWN
 )
 
 
@@ -357,25 +358,27 @@ class WheelLayout(BaseLayout):
         try:
             from PySide6.QtMultimedia import QMediaPlayer
             if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
-                if self._want_video_playing:
+                if self._want_video_playing and self.isVisible():
                     if self.audio_output:
+                        self.audio_output.setMuted(getattr(self, "_media_muted", False))
                         self.audio_output.setVolume(0.35)
                     if self.player.playbackState() != QMediaPlayer.PlayingState:
                         self.player.play()
                 else:
                     if self.audio_output:
+                        self.audio_output.setMuted(True)
                         self.audio_output.setVolume(0.0)
                     if status == QMediaPlayer.BufferedMedia:
                         self.player.pause()
             elif status == QMediaPlayer.EndOfMedia:
-                if self._want_video_playing:
+                if self._want_video_playing and self.isVisible():
                     self.player.setPosition(0)
                     self.player.play()
         except Exception:
             pass
 
     def _on_video_watchdog(self):
-        if not self._want_video_playing or not self.player:
+        if not self._want_video_playing or not self.player or not self.isVisible():
             return
         video_file = self.current_media.get("video")
         if video_file and os.path.isfile(video_file):
@@ -558,12 +561,14 @@ class WheelLayout(BaseLayout):
         if hasattr(self, "_video_watchdog_timer"):
             self._video_watchdog_timer.stop()
         if self.audio_output:
-            self.audio_output.setVolume(0.0)
+            try:
+                self.audio_output.setMuted(True)
+                self.audio_output.setVolume(0.0)
+            except Exception:
+                pass
         if self.player:
             try:
-                from PySide6.QtMultimedia import QMediaPlayer
-                if self.player.mediaStatus() == QMediaPlayer.BufferedMedia:
-                    self.player.pause()
+                self.player.pause()
             except Exception:
                 pass
         if hasattr(self, "video_timer"):
@@ -578,9 +583,15 @@ class WheelLayout(BaseLayout):
                 self._video_stack.setCurrentIndex(0)
         else:
             self._video_stack.setCurrentIndex(0)  # mostrar placeholder
+            if self.player:
+                try:
+                    self.player.stop()
+                    self.player.setSource(QUrl())
+                except Exception:
+                    pass
 
     def _start_video(self):
-        if not self._player_initialized or not self.player:
+        if not self.isVisible() or not self._player_initialized or not self.player:
             return
         video_file = self.current_media.get("video")
         if video_file and os.path.isfile(video_file):
@@ -588,6 +599,7 @@ class WheelLayout(BaseLayout):
             self._video_stack.setCurrentIndex(1)
             try:
                 if self.audio_output:
+                    self.audio_output.setMuted(getattr(self, "_media_muted", False))
                     self.audio_output.setVolume(0.35)
                 src_url = QUrl.fromLocalFile(video_file)
                 if self.player.source() == src_url:
@@ -640,6 +652,22 @@ class WheelLayout(BaseLayout):
             self.wheel_list.setCurrentRow(row)
             event.accept()
             return
+        elif matches_action(event, ACTION_NAV_LETTER, getattr(self, "db", None)):
+            self.jump_to_next_letter()
+            event.accept()
+            return
+        elif matches_action(event, ACTION_NAV_STEP5, getattr(self, "db", None)):
+            self.navigate_steps(5)
+            event.accept()
+            return
+        elif matches_action(event, ACTION_PAGE_UP, getattr(self, "db", None)):
+            self.navigate_steps(-5)
+            event.accept()
+            return
+        elif matches_action(event, ACTION_PAGE_DOWN, getattr(self, "db", None)):
+            self.navigate_steps(5)
+            event.accept()
+            return
         elif matches_action(event, ACTION_NAV_BACK, getattr(self, "db", None)):
             self.nav_back_requested.emit()
             event.accept()
@@ -663,6 +691,12 @@ class WheelLayout(BaseLayout):
         """Detiene el reproductor de video al cambiar de layout."""
         if hasattr(self, "video_timer"):
             self.video_timer.stop()
+        if hasattr(self, "audio_output") and self.audio_output:
+            try:
+                self.audio_output.setMuted(True)
+                self.audio_output.setVolume(0.0)
+            except Exception:
+                pass
         if self.player:
             try:
                 self.player.stop()

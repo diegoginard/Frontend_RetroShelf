@@ -10,6 +10,8 @@ from PySide6.QtCore import Qt
 ACTION_CLOSE_EMULATOR = "close_emulator"
 ACTION_NAV_UP = "nav_up"
 ACTION_NAV_DOWN = "nav_down"
+ACTION_NAV_LETTER = "nav_letter"
+ACTION_NAV_STEP5 = "nav_step5"
 ACTION_NAV_BACK = "nav_back"
 ACTION_PAGE_UP = "page_up"
 ACTION_PAGE_DOWN = "page_down"
@@ -33,6 +35,20 @@ ACTIONS_INFO = [
         "default_pad": "D-Pad Down",
     },
     {
+        "id": ACTION_NAV_LETTER,
+        "name": "Saltar de letra en letra (Izquierda)",
+        "desc": "Salta al primer juego de la siguiente letra (ej: si está en la A pasa a la B)",
+        "default": "Left",
+        "default_pad": "D-Pad Left",
+    },
+    {
+        "id": ACTION_NAV_STEP5,
+        "name": "Saltar de 5 en 5 (Derecha)",
+        "desc": "Avanza rápidamente saltando de 5 en 5 juegos en la lista",
+        "default": "Right",
+        "default_pad": "D-Pad Right",
+    },
+    {
         "id": ACTION_SELECT,
         "name": "Seleccionar / Entrar / Ejecutar",
         "desc": "Ejecuta el juego o entra al sistema o lista seleccionada",
@@ -48,15 +64,15 @@ ACTIONS_INFO = [
     },
     {
         "id": ACTION_PAGE_UP,
-        "name": "Página / Letra anterior",
-        "desc": "Retrocede 5 juegos o salta a la letra anterior",
+        "name": "Retroceder de a 5 / Página anterior",
+        "desc": "Retrocede 5 juegos o una página en la lista",
         "default": "PageUp",
         "default_pad": "LB",
     },
     {
         "id": ACTION_PAGE_DOWN,
-        "name": "Página / Letra siguiente",
-        "desc": "Avanza 5 juegos o salta a la siguiente letra",
+        "name": "Avanzar página (RePág)",
+        "desc": "Avanza una página completa en la lista",
         "default": "PageDown",
         "default_pad": "RB",
     },
@@ -166,9 +182,11 @@ NAME_TO_QT.setdefault("Enter", [Qt.Key_Return, Qt.Key_Enter])
 ACTION_ALIASES = {
     ACTION_NAV_UP: [Qt.Key_Up, Qt.Key_W, Qt.Key_K],
     ACTION_NAV_DOWN: [Qt.Key_Down, Qt.Key_S, Qt.Key_J],
+    ACTION_NAV_LETTER: [Qt.Key_Left, Qt.Key_A],
+    ACTION_NAV_STEP5: [Qt.Key_Right, Qt.Key_D],
     ACTION_NAV_BACK: [Qt.Key_Backspace, Qt.Key_Escape],
-    ACTION_PAGE_UP: [Qt.Key_PageUp, Qt.Key_Left],
-    ACTION_PAGE_DOWN: [Qt.Key_PageDown, Qt.Key_Right],
+    ACTION_PAGE_UP: [Qt.Key_PageUp],
+    ACTION_PAGE_DOWN: [Qt.Key_PageDown],
     ACTION_SELECT: [Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space],
 }
 
@@ -176,10 +194,12 @@ ACTION_ALIASES = {
 GAMEPAD_ACTION_ALIASES = {
     ACTION_NAV_UP: ["D-Pad Up", "L-Stick Up", "POV Up", "Axis Y-"],
     ACTION_NAV_DOWN: ["D-Pad Down", "L-Stick Down", "POV Down", "Axis Y+"],
+    ACTION_NAV_LETTER: ["D-Pad Left", "L-Stick Left", "POV Left", "Axis X-"],
+    ACTION_NAV_STEP5: ["D-Pad Right", "L-Stick Right", "POV Right", "Axis X+"],
     ACTION_SELECT: ["A", "Start", "Button 1"],
     ACTION_NAV_BACK: ["B", "Back", "Button 2"],
-    ACTION_PAGE_UP: ["LB", "D-Pad Left", "L-Stick Left", "Button 5"],
-    ACTION_PAGE_DOWN: ["RB", "D-Pad Right", "L-Stick Right", "Button 6"],
+    ACTION_PAGE_UP: ["LB", "Button 5"],
+    ACTION_PAGE_DOWN: ["RB", "Button 6"],
     ACTION_CLOSE_EMULATOR: ["Back+Start"],
     ACTION_MUTE: ["Y", "Button 4"],
 }

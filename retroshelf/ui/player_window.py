@@ -1,95 +1,57 @@
 import sys
+import os
 import subprocess
 from pathlib import Path
 import retroshelf
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer
 from PySide6.QtGui import QFont, QKeySequence, QShortcut, QGuiApplication
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-    QPushButton, QLineEdit, QMessageBox, QStackedWidget, QFrame, QScrollArea
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel,
+    QMessageBox, QStackedWidget
 )
 from retroshelf.db import Database
 from retroshelf.services.library import enrich_game_dict
 from retroshelf.services.launcher import launch_game
 from retroshelf.services.controls import (
-    ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_BACK, ACTION_SELECT,
-    ACTION_PAGE_UP, ACTION_PAGE_DOWN, ACTION_MUTE, ACTION_CLOSE_EMULATOR,
-    matches_action
+    ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_LETTER, ACTION_NAV_STEP5,
+    ACTION_NAV_BACK, ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN,
+    ACTION_MUTE, ACTION_CLOSE_EMULATOR, matches_action
 )
 from retroshelf.services.gamepad import get_gamepad_manager
 from retroshelf.ui.layouts import LAYOUT_REGISTRY, get_available_layouts, create_layout, resolve_theme_name
 
 PLAYER_STYLESHEET = """
 QMainWindow, QWidget {
-    background-color: #12141a;
+    background-color: #000000;
     color: #e6e9f2;
 }
-QScrollArea {
+QStackedWidget {
+    background-color: #000000;
     border: none;
-    background: transparent;
-}
-QPushButton[class="platform-btn"], QPushButton.platform-btn {
-    background-color: #1b1f2b;
-    border: 1px solid #282f42;
-    border-radius: 8px;
-    padding: 8px 18px;
-    font-size: 10pt;
-    font-weight: 600;
-    color: #a3b1c6;
-}
-QPushButton[class="platform-btn"]:hover, QPushButton.platform-btn:hover {
-    background-color: #262c3e;
-    border-color: #434f6e;
-    color: #ffffff;
-}
-QPushButton[class="platform-btn"]:checked, QPushButton.platform-btn:checked {
-    background-color: #5d48d9;
-    border-color: #7866ed;
-    color: #ffffff;
-}
-QLineEdit {
-    background-color: #1b1e2a;
-    border: 1px solid #2b3244;
-    border-radius: 8px;
-    padding: 8px 14px;
-    color: #f1f3f9;
-    font-size: 10pt;
-}
-QLineEdit:focus {
-    border-color: #5d48d9;
-}
-QPushButton[class="action-icon"], QPushButton.action-icon {
-    background-color: #1b1e2a;
-    border: 1px solid #2b3244;
-    border-radius: 8px;
-    padding: 8px 14px;
-    font-size: 9pt;
-    font-weight: 500;
-}
-QPushButton[class="action-icon"]:hover, QPushButton.action-icon:hover {
-    background-color: #292f42;
-    border-color: #3f4963;
+    margin: 0px;
+    padding: 0px;
 }
 """
 
+
 class PlayerWindow(QMainWindow):
     """
-    Ventana del Reproductor / Frontend de Juegos.
-    Modo visual limpio, enfocado 100% en la experiencia de juego.
-    No muestra opciones de configuración, edición de archivos ni diálogos técnicos.
+    Ventana del Frontend / Reproductor a Pantalla Completa.
+    Muestra exclusivamente los diseños visuales (layouts) en pantalla completa,
+    sin barras, botones ni elementos ajenos a la experiencia de juego.
+    Toda la configuración se realiza desde el Configurador principal (MainWindow).
     """
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.db = Database()
         self.current_list_id = None
         self.current_game_id = None
         self.games_cache = []
-        self.platform_buttons = []
+        self.active_layouts = {}
         self.navigation_history = []
 
         self.setWindowTitle("RetroShelf — Frontend")
-        self.resize(1280, 800)
-        self.setMinimumSize(800, 480)
+        self.setWindowFlags(Qt.FramelessWindowHint)
         self.setStyleSheet(PLAYER_STYLESHEET)
 
         # Gestor de mandos y joysticks en tiempo real
@@ -98,120 +60,91 @@ class PlayerWindow(QMainWindow):
 
         self._build_ui()
         self._setup_shortcuts()
-        self.load_lists()
+        self.load_startup_list()
 
     def _build_ui(self):
-        root = QWidget()
-        main_layout = QVBoxLayout(root)
-        main_layout.setContentsMargins(16, 12, 16, 12)
-        main_layout.setSpacing(12)
-
-        # 1. Barra Superior: Selector de Plataformas y Buscador
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(12)
-
-        logo_label = QLabel("RETRO<b>SHELF</b>")
-        logo_label.setStyleSheet("color: #7b6be8; font-size: 13pt; letter-spacing: 2px;")
-        top_bar.addWidget(logo_label)
-
-        # Contenedor desplazable de plataformas
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFixedHeight(48)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        self.platforms_container = QWidget()
-        self.platforms_layout = QHBoxLayout(self.platforms_container)
-        self.platforms_layout.setContentsMargins(0, 0, 0, 0)
-        self.platforms_layout.setSpacing(8)
-        self.platforms_layout.addStretch()
-
-        scroll.setWidget(self.platforms_container)
-        top_bar.addWidget(scroll, 1)
-
-        # Buscador rápido
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Buscar… (Ctrl+F)")
-        self.search_box.setFixedWidth(200)
-        self.search_timer = QTimer(self)
-        self.search_timer.setSingleShot(True)
-        self.search_timer.setInterval(180)
-        self.search_timer.timeout.connect(self._filter_games)
-        self.search_box.textChanged.connect(lambda: self.search_timer.start())
-        top_bar.addWidget(self.search_box)
-
-        # Botón Pantalla Completa
-        self.fullscreen_btn = QPushButton("⛶ Pantalla completa")
-        self.fullscreen_btn.setProperty("class", "action-icon")
-        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
-        top_bar.addWidget(self.fullscreen_btn)
-
-        # Botón para abrir el Configurador si lo necesita
-        config_btn = QPushButton("⚙ Configuración")
-        config_btn.setProperty("class", "action-icon")
-        config_btn.clicked.connect(self.open_configurator)
-        top_bar.addWidget(config_btn)
-
-        main_layout.addLayout(top_bar)
-
-        # 2. Contenedor de Layouts Dinámicos (se instancian bajo demanda)
         self.layout_stack = QStackedWidget()
-        self.active_layouts = {}
-        main_layout.addWidget(self.layout_stack, 1)
-
-        # 3. Barra inferior informativa y discreta
-        self.bottom_bar = QFrame()
-        self.bottom_bar.setStyleSheet("background-color: #161922; border-radius: 6px; padding: 6px 12px;")
-        b_layout = QHBoxLayout(self.bottom_bar)
-        b_layout.setContentsMargins(4, 4, 4, 4)
-
-        self.status_label = QLabel("Seleccioná un elemento para comenzar")
-        self.status_label.setStyleSheet("color: #8f9db3; font-size: 9pt;")
-        b_layout.addWidget(self.status_label)
-        b_layout.addStretch()
-
-        tip_label = QLabel("F11: Pantalla completa  |  A / Enter: Seleccionar / Jugar  |  B / Retroceso: Volver atrás")
-        tip_label.setStyleSheet("color: #647087; font-size: 9pt;")
-        b_layout.addWidget(tip_label)
-
-        main_layout.addWidget(self.bottom_bar)
-
-        self.setCentralWidget(root)
+        self.layout_stack.setContentsMargins(0, 0, 0, 0)
+        self.setCentralWidget(self.layout_stack)
 
     def _setup_shortcuts(self):
-        # F11 para pantalla completa
+        # F11 para alternar pantalla completa si es necesario
         QShortcut(QKeySequence(Qt.Key_F11), self, self.toggle_fullscreen)
-        # Ctrl+F para buscar
-        QShortcut(QKeySequence("Ctrl+F"), self, self.search_box.setFocus)
-        # Escape y Backspace para retroceder
+        # Escape y Backspace para retroceder / salir
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.go_back)
         QShortcut(QKeySequence(Qt.Key_Backspace), self, self.go_back)
 
+    def stop_all_active_media(self):
+        """Detiene completamente cualquier reproducción activa en TODOS los layouts para evitar audio residual."""
+        for inst in list(self.active_layouts.values()):
+            if hasattr(inst, "stop_media") and callable(inst.stop_media):
+                try:
+                    inst.stop_media()
+                except Exception:
+                    pass
+            for audio_attr in ("audio_output", "game_audio"):
+                if hasattr(inst, audio_attr):
+                    ao = getattr(inst, audio_attr)
+                    if ao:
+                        try:
+                            ao.setMuted(True)
+                            ao.setVolume(0.0)
+                        except Exception:
+                            pass
+            for player_attr in ("player", "game_player", "bg_player"):
+                if hasattr(inst, player_attr):
+                    p = getattr(inst, player_attr)
+                    if p:
+                        try:
+                            p.stop()
+                            from PySide6.QtCore import QUrl
+                            p.setSource(QUrl())
+                        except Exception:
+                            pass
+
     def go_back(self):
-        """Retrocede en el historial de navegación (listas de listas o menús)."""
-        if self.search_box.hasFocus():
-            self.search_box.clear()
-            self.search_box.clearFocus()
-            return
+        """Retrocede en el historial de navegación (listas de listas o menús), o cierra la ventana si está en la raíz."""
+        # Detener inmediatamente el audio y video de TODOS los layouts antes de retroceder
+        self.stop_all_active_media()
+
         if self.navigation_history:
             prev_entry = self.navigation_history.pop()
-            if isinstance(prev_entry, int):
-                self.select_list(prev_entry, push_history=False)
+            prev_lid = None
+            prev_gid = None
+            if isinstance(prev_entry, (tuple, list)):
+                prev_lid = prev_entry[0]
+                if len(prev_entry) > 1:
+                    prev_gid = prev_entry[1]
             elif isinstance(prev_entry, dict):
-                lid = prev_entry.get("list_id") or prev_entry.get("id")
-                if lid:
-                    self.select_list(int(lid), push_history=False)
+                prev_lid = prev_entry.get("list_id") or prev_entry.get("id")
+                prev_gid = prev_entry.get("selected_game_id")
+            elif isinstance(prev_entry, int):
+                prev_lid = prev_entry
+
+            if prev_lid:
+                self.select_list(int(prev_lid), push_history=False, restore_game_id=prev_gid)
             return
-        if self.isFullScreen():
-            self.showNormal()
-            self.fullscreen_btn.setText("⛶ Pantalla completa")
+
+        # Si no hay historial previo (estamos en el menú o lista de inicio), salir del frontend
+        self.close()
 
     def keyPressEvent(self, event):
-        if matches_action(event, ACTION_NAV_BACK, self.db):
+        if matches_action(event, ACTION_NAV_BACK, self.db) or matches_action(event, ACTION_CLOSE_EMULATOR, self.db):
             self.go_back()
             event.accept()
             return
+        elif matches_action(event, ACTION_NAV_LETTER, self.db):
+            cur = self.layout_stack.currentWidget()
+            if cur and hasattr(cur, "jump_to_next_letter"):
+                cur.jump_to_next_letter()
+                event.accept()
+                return
+        elif matches_action(event, ACTION_NAV_STEP5, self.db):
+            cur = self.layout_stack.currentWidget()
+            if cur and hasattr(cur, "navigate_steps"):
+                cur.navigate_steps(5)
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def _on_gamepad_action(self, action_id: str):
@@ -243,6 +176,22 @@ class PlayerWindow(QMainWindow):
                 row = min(current_layout.table.rowCount() - 1, current_layout.table.currentRow() + 1)
                 current_layout.table.selectRow(row)
 
+        elif action_id == ACTION_NAV_LETTER:
+            if hasattr(current_layout, "jump_to_next_letter"):
+                current_layout.jump_to_next_letter()
+
+        elif action_id == ACTION_NAV_STEP5:
+            if hasattr(current_layout, "navigate_steps"):
+                current_layout.navigate_steps(5)
+            elif hasattr(current_layout, "_navigate_steps"):
+                current_layout._navigate_steps(5)
+            elif hasattr(current_layout, "wheel_list"):
+                row = min(current_layout.wheel_list.count() - 1, current_layout.wheel_list.currentRow() + 5)
+                current_layout.wheel_list.setCurrentRow(row)
+            elif hasattr(current_layout, "table"):
+                row = min(current_layout.table.rowCount() - 1, current_layout.table.currentRow() + 5)
+                current_layout.table.selectRow(row)
+
         elif action_id == ACTION_PAGE_UP:
             if hasattr(current_layout, "_navigate_steps"):
                 current_layout._navigate_steps(-5)
@@ -267,7 +216,7 @@ class PlayerWindow(QMainWindow):
             elif self.current_game_id:
                 self._on_game_activated(self.current_game_id)
 
-        elif action_id == ACTION_NAV_BACK:
+        elif action_id == ACTION_NAV_BACK or action_id == ACTION_CLOSE_EMULATOR:
             self.go_back()
 
         elif action_id == ACTION_MUTE:
@@ -277,7 +226,7 @@ class PlayerWindow(QMainWindow):
                 current_layout.set_media_muted(not getattr(current_layout, "_media_muted", False))
 
     def apply_video_settings(self):
-        """Pre-calcula la configuración de video para aplicarla una vez que la ventana sea visible."""
+        """Pre-calcula la configuración de video para aplicarla al iniciar."""
         screens = QGuiApplication.screens()
         primary = QGuiApplication.primaryScreen()
 
@@ -289,7 +238,7 @@ class PlayerWindow(QMainWindow):
         target_screen = screens[mon_idx] if (screens and 0 <= mon_idx < len(screens)) else primary
         geo = target_screen.geometry() if target_screen else None
 
-        mode = self.db.get_setting("video_mode", "windowed")  # windowed por defecto para evitar crashes
+        mode = self.db.get_setting("video_mode", "fullscreen")
         res_key = self.db.get_setting("video_resolution", "native")
 
         if res_key == "custom":
@@ -300,18 +249,17 @@ class PlayerWindow(QMainWindow):
                 w, h = 1920, 1080
         elif res_key == "native" or "x" not in str(res_key):
             if geo:
-                w = int(geo.width() * 0.9)
-                h = int(geo.height() * 0.9)
+                w = geo.width()
+                h = geo.height()
             else:
-                w, h = 1280, 800
+                w, h = 1920, 1080
         else:
             try:
                 parts = str(res_key).split("x")
                 w, h = int(parts[0]), int(parts[1])
             except Exception:
-                w, h = 1280, 720
+                w, h = 1920, 1080
 
-        # Guardar parámetros para aplicarlos en el showEvent
         self._pending_mode = mode
         self._pending_geo = geo
         self._pending_w = w
@@ -319,99 +267,94 @@ class PlayerWindow(QMainWindow):
         self.configured_window_size = QSize(w, h)
 
     def _apply_show(self):
-        """Aplica la configuración de ventana DESPUÉS de que el event loop está activo.
-        Se llama via QTimer.singleShot desde run_player para evitar crashes en Windows."""
-        from PySide6.QtCore import QTimer
-
-        mode = getattr(self, "_pending_mode", "windowed")
+        """Aplica la configuración de visualización a pantalla completa."""
+        mode = getattr(self, "_pending_mode", "fullscreen")
         geo = getattr(self, "_pending_geo", None)
-        w = getattr(self, "_pending_w", 1280)
-        h = getattr(self, "_pending_h", 800)
+        w = getattr(self, "_pending_w", 1920)
+        h = getattr(self, "_pending_h", 1080)
 
-        # Paso 1: Siempre abrir primero como ventana normal (evita crash de showFullScreen en Windows)
-        self.showNormal()
-        self.resize(w, h)
-        if geo:
-            cx = geo.x() + (geo.width() - w) // 2
-            cy = geo.y() + (geo.height() - h) // 2
-            try:
-                self.move(max(geo.x(), cx), max(geo.y(), cy))
-            except Exception:
-                pass
+        if mode == "windowed":
+            self.showNormal()
+            self.resize(w, h)
+            if geo:
+                cx = geo.x() + (geo.width() - w) // 2
+                cy = geo.y() + (geo.height() - h) // 2
+                try:
+                    self.move(max(geo.x(), cx), max(geo.y(), cy))
+                except Exception:
+                    pass
+            self.raise_()
+            self.activateWindow()
+        else:
+            # Pantalla completa (fullscreen / borderless)
+            self.showNormal()
+            self.resize(w, h)
+            if geo:
+                try:
+                    self.move(geo.topLeft())
+                except Exception:
+                    pass
+            self.raise_()
+            self.activateWindow()
 
-        self.raise_()
-        self.activateWindow()
-
-        # Paso 2: Si el usuario eligió fullscreen, aplicarlo después de que Qt esté estabilizado
-        if mode in ("fullscreen", "borderless"):
             def _go_fullscreen():
                 try:
                     if geo:
                         self.move(geo.topLeft())
                     self.showFullScreen()
-                    self.fullscreen_btn.setText("🗗 Ventana")
                 except Exception:
-                    pass  # Si falla el fullscreen, quedamos en ventana normal
-            QTimer.singleShot(200, _go_fullscreen)
-        else:
-            self.fullscreen_btn.setText("⛶ Pantalla completa")
+                    pass
+            QTimer.singleShot(150, _go_fullscreen)
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
             self.showNormal()
             if hasattr(self, "configured_window_size") and self.configured_window_size.isValid():
                 self.resize(self.configured_window_size)
-            self.fullscreen_btn.setText("⛶ Pantalla completa")
         else:
             self.showFullScreen()
-            self.fullscreen_btn.setText("🗗 Ventana")
 
-    def open_configurator(self):
-        """Abre el configurador sin cerrar el reproductor."""
-        from retroshelf.ui.main_window import MainWindow
-        self.config_window = MainWindow()
-        self.config_window.show()
-
-    def load_lists(self):
-        """Carga las listas/consolas configuradas en la barra superior."""
-        # Limpiar botones anteriores
-        for btn in self.platform_buttons:
-            self.platforms_layout.removeWidget(btn)
-            btn.deleteLater()
-        self.platform_buttons.clear()
-
+    def load_startup_list(self):
+        """Carga la lista o menú configurado como inicio del frontend."""
         rows = self.db.get_lists(with_counts=True)
-
         if not rows:
-            self.status_label.setText("No hay listas creadas. Abrí el Configurador para crear listas y añadir juegos.")
+            self._show_empty_placeholder(
+                "No hay listas creadas en RetroShelf.<br><br>"
+                "Abrí el Configurador para crear listas y añadir juegos."
+            )
             return
 
-        for idx, row in enumerate(rows):
-            name = row["name"]
-            is_menu = (row["list_type"] == "menu") if "list_type" in row.keys() else False
-            if is_menu:
-                sub_items = self.db.get_menu_items(row["id"])
-                btn = QPushButton(f"🧭 {name} ({len(sub_items)})")
-            else:
-                count = row["game_count"]
-                btn = QPushButton(f"{name} ({count})")
-            btn.setProperty("class", "platform-btn")
-            btn.setCheckable(True)
-            list_id = row["id"]
-            btn.clicked.connect(lambda checked=False, lid=list_id: self.select_list(lid, push_history=True))
-            self.platforms_layout.insertWidget(idx, btn)
-            self.platform_buttons.append((list_id, btn))
+        saved_startup = self.db.get_setting("frontend_startup_list", "")
+        target_id = None
+        if saved_startup:
+            try:
+                sid = int(saved_startup)
+                if any(r["id"] == sid for r in rows):
+                    target_id = sid
+            except (ValueError, TypeError):
+                pass
 
-        # Seleccionar la primera lista por defecto
-        if self.platform_buttons:
-            self.select_list(self.platform_buttons[0][0], push_history=False)
+        if target_id is None:
+            target_id = rows[0]["id"]
+
+        self.select_list(target_id, push_history=False)
+
+    def _show_empty_placeholder(self, message: str):
+        placeholder = QWidget()
+        v = QVBoxLayout(placeholder)
+        v.setAlignment(Qt.AlignCenter)
+        lbl = QLabel(message)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("color: #a3b1c6; font-size: 14pt; line-height: 1.6;")
+        v.addWidget(lbl)
+        self.layout_stack.addWidget(placeholder)
+        self.layout_stack.setCurrentWidget(placeholder)
 
     def _get_or_create_layout(self, layout_name: str):
         """Obtiene una instancia del layout o la crea dinámicamente si es un tema de sistema."""
         if layout_name in self.active_layouts:
             return self.active_layouts[layout_name]
 
-        # Crear dinámicamente
         inst = create_layout(layout_name)
         inst.db = self.db
         inst.game_selected.connect(self._on_game_selected)
@@ -422,15 +365,15 @@ class PlayerWindow(QMainWindow):
         self.layout_stack.addWidget(inst)
         return inst
 
-    def select_list(self, list_id: int, push_history: bool = True):
+    def select_list(self, list_id: int, push_history: bool = True, restore_game_id: int | None = None):
+        """
+        Selecciona una lista o menú y carga su layout específico asignado.
+        Si proviene de un menú (lista de listas), este método carga el layout propio de la sub-lista.
+        """
         if push_history and self.current_list_id and self.current_list_id != list_id:
-            self.navigation_history.append(self.current_list_id)
+            self.navigation_history.append((self.current_list_id, self.current_game_id))
 
         self.current_list_id = list_id
-
-        # Actualizar estado 'checked' de los botones
-        for lid, btn in self.platform_buttons:
-            btn.setChecked(lid == list_id)
 
         row = self.db.get_list(list_id)
         if not row:
@@ -443,7 +386,6 @@ class PlayerWindow(QMainWindow):
 
         available = get_available_layouts()
 
-        # Determinar el layout objetivo
         if chosen_layout in available:
             target_layout = chosen_layout
         elif resolve_theme_name(chosen_layout):
@@ -457,20 +399,19 @@ class PlayerWindow(QMainWindow):
         elif resolve_theme_name(list_name):
             target_layout = resolve_theme_name(list_name)
         else:
-            target_layout = "Grid"
+            target_layout = "Wheel"
+
+        # Detener multimedia de todos los layouts antes de cambiar para evitar audio residual
+        self.stop_all_active_media()
 
         inst = self._get_or_create_layout(target_layout)
-        # Detener multimedia del layout anterior para evitar audio residual
-        previous = self.layout_stack.currentWidget()
-        if previous and previous is not inst and hasattr(previous, 'stop_media'):
-            previous.stop_media()
         self.layout_stack.setCurrentWidget(inst)
         inst.setFocus()
 
         self.current_game_id = None
-        self.load_games()
+        self.load_games(restore_game_id=restore_game_id)
 
-    def load_games(self):
+    def load_games(self, restore_game_id: int | None = None):
         if not self.current_list_id:
             self.games_cache = []
             return
@@ -478,8 +419,6 @@ class PlayerWindow(QMainWindow):
         row = self.db.get_list(self.current_list_id)
         if not row:
             return
-
-        term = self.search_box.text().strip().lower()
 
         if "list_type" in row.keys() and row["list_type"] == "menu":
             menu_media_path = row["media_path"] if "media_path" in row.keys() else ""
@@ -494,8 +433,6 @@ class PlayerWindow(QMainWindow):
                 t_dict = dict(t)
                 title = t_dict["name"]
                 platform = t_dict["platform"] or title
-                if term and (term not in title.lower() and term not in platform.lower()):
-                    continue
                 g_count = self.db.count_games(t_dict["id"])
                 items.append({
                     "id": t_dict["id"],
@@ -522,57 +459,44 @@ class PlayerWindow(QMainWindow):
             current_layout = self.layout_stack.currentWidget()
             if current_layout:
                 current_layout.set_games(self.games_cache)
-                if self.games_cache:
-                    first_id = self.games_cache[0]["id"]
-                    current_layout.select_game_by_id(first_id)
-                    self._on_game_selected(first_id)
-                else:
-                    self.status_label.setText("No hay sistemas en este menú. Agregalos desde el Configurador.")
+                target_select_id = None
+                if restore_game_id and any(item["id"] == restore_game_id for item in self.games_cache):
+                    target_select_id = restore_game_id
+                elif self.games_cache:
+                    target_select_id = self.games_cache[0]["id"]
+
+                if target_select_id:
+                    current_layout.select_game_by_id(target_select_id)
+                    self._on_game_selected(target_select_id)
             return
 
-        rows = self.db.get_games(self.current_list_id, search_term=term, enriched=True)
+        rows = self.db.get_games(self.current_list_id, search_term="", enriched=True)
         self.games_cache = [enrich_game_dict(r) for r in rows]
 
         current_layout = self.layout_stack.currentWidget()
-
         if current_layout:
             current_layout.set_games(self.games_cache)
-            if self.games_cache:
-                first_id = self.games_cache[0]["id"]
-                current_layout.select_game_by_id(first_id)
-                self._on_game_selected(first_id)
-            else:
-                self.status_label.setText("No hay juegos en esta lista. Añadí juegos en el Configurador.")
+            target_select_id = None
+            if restore_game_id and any(item["id"] == restore_game_id for item in self.games_cache):
+                target_select_id = restore_game_id
+            elif self.games_cache:
+                target_select_id = self.games_cache[0]["id"]
 
-    def _filter_games(self):
-        self.load_games()
+            if target_select_id:
+                current_layout.select_game_by_id(target_select_id)
+                self._on_game_selected(target_select_id)
 
     def _on_game_selected(self, game_id: int):
         self.current_game_id = game_id
-        game = next((g for g in self.games_cache if g["id"] == game_id), None)
-        if game:
-            if game.get("is_menu_target"):
-                self.status_label.setText(
-                    f"🧭 <b>{game['title']}</b>   |   {game.get('effective_name', '')}   |   Enter: Entrar al sistema  |  Esc / Retroceso: Volver"
-                )
-            else:
-                emu = game.get("effective_name", "Sin emulador")
-                extra = []
-                if game.get("year"):
-                    extra.append(game["year"])
-                if game.get("manufacturer"):
-                    extra.append(game["manufacturer"])
-                if game.get("genre"):
-                    extra.append(game["genre"])
-                extra_str = f"   |   {' · '.join(extra)}" if extra else ""
-                self.status_label.setText(f"🎮 <b>{game['title']}</b>{extra_str}   |   Emulador: {emu}")
 
     def _on_game_activated(self, game_id: int):
         self.current_game_id = game_id
         game = next((g for g in self.games_cache if g["id"] == game_id), None)
         if game and game.get("is_menu_target"):
+            self.stop_all_active_media()
             target_id = game["target_list_id"]
-            self.select_list(target_id, push_history=True)
+            self.navigation_history.append((self.current_list_id, self.current_game_id))
+            self.select_list(target_id, push_history=False)
             return
 
         db_game = self.db.get_game(game_id)
@@ -580,23 +504,16 @@ class PlayerWindow(QMainWindow):
             return
 
         try:
-            self.status_label.setText(f"Iniciando <b>{db_game['title']}</b>...")
+            self.stop_all_active_media()
             QApplication.processEvents()
             active_layout = self.layout_stack.currentWidget()
-            emu_name, source = launch_game(self.db, db_game, layout=active_layout, parent_window=self)
-            self.status_label.setText(f"Ejecutando <b>{db_game['title']}</b> con {emu_name}")
+            launch_game(self.db, db_game, layout=active_layout, parent_window=self)
         except Exception as e:
             QMessageBox.critical(self, "No se pudo iniciar el juego", str(e))
-            self.status_label.setText("Error al ejecutar el juego.")
 
     def closeEvent(self, event):
         """Detiene cualquier reproducción activa antes de cerrar la ventana."""
-        for inst in self.active_layouts.values():
-            if hasattr(inst, "player") and inst.player:
-                try:
-                    inst.player.stop()
-                except Exception:
-                    pass
+        self.stop_all_active_media()
         super().closeEvent(event)
 
 
@@ -617,11 +534,7 @@ def run_player():
     app.setFont(QFont("Segoe UI", 10))
     app.setApplicationName("RetroShelf Player")
     window = PlayerWindow()
-    # Pre-calcular la configuración (sin abrir ventana todavía)
     window.apply_video_settings()
-    # Mostrar la ventana dentro del event loop para evitar crashes de acceso a memoria en Windows
     QTimer.singleShot(0, window._apply_show)
     code = app.exec()
     os._exit(code)
-
-

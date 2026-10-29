@@ -11,8 +11,8 @@ from ctypes import wintypes
 from PySide6.QtCore import QObject, Signal, QTimer
 
 from retroshelf.services.controls import (
-    ACTIONS_INFO, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_BACK,
-    ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN, ACTION_CLOSE_EMULATOR,
+    ACTIONS_INFO, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_LETTER, ACTION_NAV_STEP5,
+    ACTION_NAV_BACK, ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN, ACTION_CLOSE_EMULATOR,
     ACTION_MUTE, get_gamepad_binding, matches_gamepad_action
 )
 
@@ -236,6 +236,8 @@ class GamepadManager(QObject):
             check_order = [
                 ACTION_NAV_UP,
                 ACTION_NAV_DOWN,
+                ACTION_NAV_LETTER,
+                ACTION_NAV_STEP5,
                 ACTION_SELECT,
                 ACTION_NAV_BACK,
                 ACTION_PAGE_UP,
@@ -253,8 +255,11 @@ class GamepadManager(QObject):
             self._prev_inputs = current_inputs
             return
 
-        # Distinguir entre acciones navegables (con repetición) y acciones de un solo toque
-        repeatable_actions = {ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_PAGE_UP, ACTION_PAGE_DOWN}
+        # Distinguir entre acciones navegables continuas y acciones de salto por toque único
+        repeatable_actions = {
+            ACTION_NAV_UP, ACTION_NAV_DOWN,
+            ACTION_PAGE_UP, ACTION_PAGE_DOWN
+        }
 
         if matched_action in repeatable_actions:
             if matched_action == self._held_action:

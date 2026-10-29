@@ -23,6 +23,7 @@ from retroshelf.ui.dialogs import (
     EmulatorDialog, ListDialog, EmulatorManagerDialog, EmulatorManagerWidget,
     ScanSummaryDialog, GameEditDialog
 )
+from retroshelf.ui.frontend_tab import FrontendSettingsWidget
 from retroshelf.ui.settings_tab import SystemSettingsWidget
 from retroshelf.ui.layouts import LAYOUT_REGISTRY, get_available_layouts, create_layout, resolve_theme_name
 
@@ -365,9 +366,33 @@ class MainWindow(QMainWindow):
         self.emulator_tab.emulators_changed.connect(self._on_emulators_changed)
         self.main_tabs.addTab(self.emulator_tab, "🕹  Administrar Emuladores")
 
+        self.frontend_tab = FrontendSettingsWidget(self.db, self)
+        self.frontend_tab.layout_changed.connect(self._on_frontend_layout_changed)
+        self.frontend_tab.launch_requested.connect(self.launch_frontend_player)
+        self.main_tabs.addTab(self.frontend_tab, "📺  Modo Frontend")
+
         self.settings_tab = SystemSettingsWidget(self.db, self)
         self.settings_tab.settings_saved.connect(self._on_settings_saved)
         self.main_tabs.addTab(self.settings_tab, "⚙  Configuración del Sistema")
+
+        corner_btn = QPushButton("▶  Iniciar Frontend")
+        corner_btn.setToolTip("Iniciar el Frontend a pantalla completa sin botones")
+        corner_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #5d48d9;
+                color: #ffffff;
+                font-weight: bold;
+                border-radius: 6px;
+                padding: 6px 14px;
+                margin-right: 6px;
+                font-size: 9.5pt;
+            }
+            QPushButton:hover {
+                background-color: #6e59ea;
+            }
+        """)
+        corner_btn.clicked.connect(self.launch_frontend_player)
+        self.main_tabs.setCornerWidget(corner_btn, Qt.TopRightCorner)
 
         self.main_tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -417,6 +442,9 @@ class MainWindow(QMainWindow):
                 self.list_widget.setCurrentItem(item)
 
         self.list_widget.blockSignals(False)
+
+        if hasattr(self, "frontend_tab"):
+            self.frontend_tab.refresh_data()
 
         if self.list_widget.count() > 0 and self.list_widget.currentRow() < 0:
             self.list_widget.setCurrentRow(0)
@@ -712,6 +740,8 @@ class MainWindow(QMainWindow):
         self._apply_layout_view(layout)
         if self.current_list_id:
             self.db.update_list(self.current_list_id, layout=layout)
+            if hasattr(self, "frontend_tab"):
+                self.frontend_tab.refresh_data()
             self.statusBar().showMessage(f"Diseño guardado: {layout}", 2500)
 
     def _get_or_create_layout(self, layout_name: str):
@@ -735,10 +765,8 @@ class MainWindow(QMainWindow):
         else:
             resolved = resolve_theme_name(layout)
             target = resolved if (resolved and resolved in available) else "Grid"
-        # Detener multimedia del layout anterior para evitar audio residual
-        previous = self.layout_stack.currentWidget()
-        if previous and hasattr(previous, 'stop_media'):
-            previous.stop_media()
+        # Detener multimedia de todos los layouts activos para evitar audio residual
+        self.stop_all_active_media()
         inst = self._get_or_create_layout(target)
         inst.db = self.db
         self.layout_stack.setCurrentWidget(inst)
@@ -1278,17 +1306,68 @@ class MainWindow(QMainWindow):
 
     def open_system_settings_tab(self):
         """Abre directamente la pestaña de Configuración del Sistema."""
-        self.main_tabs.setCurrentIndex(2)
+        self.main_tabs.setCurrentWidget(self.settings_tab)
+
+    def open_frontend_tab(self):
+        """Abre directamente la pestaña de Modo Frontend."""
+        self.main_tabs.setCurrentWidget(self.frontend_tab)
 
     def _on_tab_changed(self, index: int):
         """Mantiene sincronizados los datos al alternar entre pestañas."""
-        if index == 0:
+        current_widget = self.main_tabs.widget(index)
+        if current_widget == self.main_tabs.widget(0):
             self.refresh_emulators()
             self.refresh_games()
             if self.current_game_id:
                 self._select_game_by_id(self.current_game_id)
-        elif index == 1:
+        elif current_widget == self.emulator_tab:
             self.emulator_tab.refresh()
+        elif current_widget == self.frontend_tab:
+            self.frontend_tab.refresh_data()
+
+    def _on_frontend_layout_changed(self, list_id: int, layout_name: str):
+        """Sincroniza el diseño visual cuando se edita desde la pestaña de Modo Frontend."""
+        if self.current_list_id == list_id:
+            self.layout_combo.blockSignals(True)
+            self.layout_combo.setCurrentText(layout_name)
+            self.layout_combo.blockSignals(False)
+            self._apply_layout_view(layout_name, render=True)
+        self.refresh_lists(select_id=self.current_list_id)
+
+    def launch_frontend_player(self):
+        """Lanza el reproductor Frontend a pantalla completa directamente desde el configurador."""
+        self.stop_all_active_media()
+        from retroshelf.ui.player_window import PlayerWindow
+        self.player_window = PlayerWindow(parent=None)
+        self.player_window.apply_video_settings()
+        QTimer.singleShot(0, self.player_window._apply_show)
+
+    def stop_all_active_media(self):
+        """Detiene cualquier reproducción activa en los layouts para evitar audio residual."""
+        for inst in list(getattr(self, "active_layouts", {}).values()):
+            if hasattr(inst, "stop_media") and callable(inst.stop_media):
+                try:
+                    inst.stop_media()
+                except Exception:
+                    pass
+            for audio_attr in ("audio_output", "game_audio"):
+                if hasattr(inst, audio_attr):
+                    ao = getattr(inst, audio_attr)
+                    if ao:
+                        try:
+                            ao.setMuted(True)
+                            ao.setVolume(0.0)
+                        except Exception:
+                            pass
+            for player_attr in ("player", "game_player", "bg_player"):
+                if hasattr(inst, player_attr):
+                    p = getattr(inst, player_attr)
+                    if p:
+                        try:
+                            p.stop()
+                            p.setSource(QUrl())
+                        except Exception:
+                            pass
 
     def _on_emulators_changed(self):
         """Callback cuando se modifica algún emulador en la pestaña de emuladores."""
@@ -1304,18 +1383,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Detiene cualquier reproducción activa antes de cerrar la ventana para evitar errores de Media Foundation."""
-        for inst in getattr(self, "active_layouts", {}).values():
-            if hasattr(inst, "stop_media") and callable(inst.stop_media):
-                try:
-                    inst.stop_media()
-                except Exception:
-                    pass
-            elif hasattr(inst, "player") and inst.player:
-                try:
-                    inst.player.stop()
-                    inst.player.setSource(QUrl())
-                except Exception:
-                    pass
+        self.stop_all_active_media()
+        if hasattr(self, "player_window") and self.player_window:
+            try:
+                self.player_window.close()
+            except Exception:
+                pass
         super().closeEvent(event)
 
 

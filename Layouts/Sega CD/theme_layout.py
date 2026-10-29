@@ -475,7 +475,7 @@ class ThemeLayout(BaseLayout):
         if not self.player:
             return
         if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
-            if getattr(self, "_want_video_playing", False):
+            if getattr(self, "_want_video_playing", False) and self.isVisible():
                 if self.audio_output:
                     is_snap = getattr(self, "_pending_video_is_snap", True)
                     self.audio_output.setVolume(0.7 if is_snap else 0.0)
@@ -485,11 +485,15 @@ class ThemeLayout(BaseLayout):
                     self.player.play()
             else:
                 if self.audio_output:
-                    self.audio_output.setVolume(0.0)
+                    try:
+                        self.audio_output.setMuted(True)
+                        self.audio_output.setVolume(0.0)
+                    except Exception:
+                        pass
                 if status == QMediaPlayer.BufferedMedia:
                     self.player.pause()
         elif status == QMediaPlayer.EndOfMedia:
-            if getattr(self, "_want_video_playing", False):
+            if getattr(self, "_want_video_playing", False) and self.isVisible():
                 self.player.setPosition(0)
                 self.player.play()
 
@@ -497,7 +501,7 @@ class ThemeLayout(BaseLayout):
         self._current_video_image = None
 
     def _on_video_watchdog(self):
-        if not getattr(self, "_want_video_playing", False) or not getattr(self, "_pending_video_path", None):
+        if not getattr(self, "_want_video_playing", False) or not getattr(self, "_pending_video_path", None) or not self.isVisible():
             return
         if not os.path.isfile(self._pending_video_path) or not self.player:
             return
@@ -524,11 +528,18 @@ class ThemeLayout(BaseLayout):
 
     def stop_media(self):
         self._want_video_playing = False
-        if hasattr(self, "_video_debounce_timer"):
+        self._pending_video_path = None
+        if hasattr(self, '_video_debounce_timer'):
             self._video_debounce_timer.stop()
-        if hasattr(self, "_video_watchdog_timer"):
+        if hasattr(self, '_video_watchdog_timer'):
             self._video_watchdog_timer.stop()
-        if self.player:
+        if hasattr(self, 'audio_output') and self.audio_output:
+            try:
+                self.audio_output.setMuted(True)
+                self.audio_output.setVolume(0.0)
+            except Exception:
+                pass
+        if hasattr(self, 'player') and self.player:
             try:
                 self.player.stop()
                 self.player.setSource(QUrl())
@@ -663,6 +674,8 @@ class ThemeLayout(BaseLayout):
         self._video_debounce_timer.start()
 
     def _play_debounced_video(self):
+        if not self.isVisible():
+            return
         self._load_pending_art()
         self.update()
         target_file = getattr(self, "_pending_video_path", None)
@@ -686,7 +699,17 @@ class ThemeLayout(BaseLayout):
         else:
             self._want_video_playing = False
             if self.audio_output:
-                self.audio_output.setVolume(0.0)
+                try:
+                    self.audio_output.setMuted(True)
+                    self.audio_output.setVolume(0.0)
+                except Exception:
+                    pass
+            if self.player:
+                try:
+                    self.player.stop()
+                    self.player.setSource(QUrl())
+                except Exception:
+                    pass
             self._current_video_image = None
             self.update()
 
@@ -1126,8 +1149,24 @@ class ThemeLayout(BaseLayout):
                 pass
 
     def stop_media(self):
-        if self.player:
-            self.player.stop()
+        self._want_video_playing = False
+        self._pending_video_path = None
+        if hasattr(self, '_video_debounce_timer'):
+            self._video_debounce_timer.stop()
+        if hasattr(self, '_video_watchdog_timer'):
+            self._video_watchdog_timer.stop()
+        if hasattr(self, 'audio_output') and self.audio_output:
+            try:
+                self.audio_output.setMuted(True)
+                self.audio_output.setVolume(0.0)
+            except Exception:
+                pass
+        if hasattr(self, 'player') and self.player:
+            try:
+                self.player.stop()
+                self.player.setSource(QUrl())
+            except Exception:
+                pass
         self._current_video_image = None
         self.update()
 
@@ -1138,8 +1177,6 @@ class ThemeLayout(BaseLayout):
     def showEvent(self, event):
         super().showEvent(event)
         self._start_logo_animation()
-        if self.player and self.player.playbackState() == QMediaPlayer.PausedState:
-            self.player.play()
 
     def clear(self):
         self._wheel_spin_offset = 0.0

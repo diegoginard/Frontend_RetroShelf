@@ -317,18 +317,23 @@ class ThemeLayout(BaseLayout):
         if not self.game_player:
             return
         if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
-            if self._want_game_video_playing:
+            if self._want_game_video_playing and self.isVisible():
                 if self.game_audio:
+                    self.game_audio.setMuted(self._media_muted)
                     self.game_audio.setVolume(0.0 if self._media_muted else 0.8)
                 if self.game_player.playbackState() != QMediaPlayer.PlayingState:
                     self.game_player.play()
             else:
                 if self.game_audio:
-                    self.game_audio.setVolume(0.0)
+                    try:
+                        self.game_audio.setMuted(True)
+                        self.game_audio.setVolume(0.0)
+                    except Exception:
+                        pass
                 if status == QMediaPlayer.BufferedMedia:
                     self.game_player.pause()
         elif status == QMediaPlayer.EndOfMedia:
-            if self._want_game_video_playing:
+            if self._want_game_video_playing and self.isVisible():
                 self.game_player.setPosition(0)
                 self.game_player.play()
 
@@ -336,7 +341,7 @@ class ThemeLayout(BaseLayout):
         self._game_video_image = None
 
     def _on_game_video_watchdog(self):
-        if not self._want_game_video_playing or not self._pending_video_path:
+        if not self._want_game_video_playing or not self._pending_video_path or not self.isVisible():
             return
         if not os.path.isfile(self._pending_video_path) or not self.game_player:
             return
@@ -641,8 +646,12 @@ class ThemeLayout(BaseLayout):
         self._want_game_video_playing = False
         self._video_watchdog_timer.stop()
         if self.game_audio:
-            self.game_audio.setVolume(0.0)
-        if self.game_player and self.game_player.mediaStatus() == QMediaPlayer.BufferedMedia:
+            try:
+                self.game_audio.setMuted(True)
+                self.game_audio.setVolume(0.0)
+            except Exception:
+                pass
+        if self.game_player:
             try:
                 self.game_player.pause()
             except Exception:
@@ -651,6 +660,8 @@ class ThemeLayout(BaseLayout):
         self._video_debounce_timer.start()
 
     def _play_debounced_video(self):
+        if not self.isVisible():
+            return
         self._load_current_game_art()
         self.update()
         video_path = self._pending_video_path
@@ -659,6 +670,7 @@ class ThemeLayout(BaseLayout):
             if self.game_player:
                 self._want_game_video_playing = True
                 if self.game_audio:
+                    self.game_audio.setMuted(self._media_muted)
                     self.game_audio.setVolume(0.0 if self._media_muted else 0.8)
                 try:
                     src_url = QUrl.fromLocalFile(video_path)
@@ -673,7 +685,17 @@ class ThemeLayout(BaseLayout):
         else:
             self._want_game_video_playing = False
             if self.game_audio:
-                self.game_audio.setVolume(0.0)
+                try:
+                    self.game_audio.setMuted(True)
+                    self.game_audio.setVolume(0.0)
+                except Exception:
+                    pass
+            if self.game_player:
+                try:
+                    self.game_player.stop()
+                    self.game_player.setSource(QUrl())
+                except Exception:
+                    pass
             self._game_video_image = None
             self.update()
 
