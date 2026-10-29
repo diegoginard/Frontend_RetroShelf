@@ -27,14 +27,22 @@ SCREEN_MODES = [
 ]
 
 RESOLUTIONS_LIST = [
-    ("Nativa del monitor (Recomendado)", "native"),
-    ("1920 x 1080 (Full HD 1080p)", "1920x1080"),
-    ("2560 x 1440 (2K QHD)", "2560x1440"),
-    ("3840 x 2160 (4K UHD)", "3840x2160"),
-    ("1280 x 720 (HD 720p)", "1280x720"),
-    ("1024 x 768 (4:3 CRT Retro)", "1024x768"),
-    ("1600 x 900", "1600x900"),
-    ("Personalizada...", "custom")
+    ("Resolución del sistema (Nativa del monitor)", "system"),
+    ("3840 x 2160 (4K UHD - 16:9)", "3840x2160"),
+    ("2560 x 1440 (2K QHD - 16:9)", "2560x1440"),
+    ("1920 x 1080 (Full HD 1080p - 16:9)", "1920x1080"),
+    ("1600 x 900 (HD+ - 16:9)", "1600x900"),
+    ("1366 x 768 (Laptop HD - 16:9)", "1366x768"),
+    ("1360 x 768 (HD Wide - TV / Monitor)", "1360x768"),
+    ("1280 x 720 (HD 720p - 16:9)", "1280x720"),
+    ("1920 x 1200 (WUXGA - 16:10)", "1920x1200"),
+    ("1680 x 1050 (16:10)", "1680x1050"),
+    ("1280 x 800 (16:10)", "1280x800"),
+    ("1280 x 1024 (SXGA - 5:4)", "1280x1024"),
+    ("1024 x 768 (XGA 4:3 CRT / Arcade)", "1024x768"),
+    ("800 x 600 (SVGA - 4:3)", "800x600"),
+    ("640 x 480 (VGA 4:3 Retro)", "640x480"),
+    ("Personalizada (definir ancho y alto)...", "custom"),
 ]
 
 GRAPHICS_ENGINES = [
@@ -418,10 +426,40 @@ class SystemSettingsWidget(QWidget):
         self.res_combo = QComboBox()
         for label, val in RESOLUTIONS_LIST:
             self.res_combo.addItem(label, val)
+        self.res_combo.currentIndexChanged.connect(self._on_res_changed)
         col2.addWidget(self.res_combo)
         row_v1.addLayout(col2, 1)
 
         v_video.addLayout(row_v1)
+
+        # Fila de resolución personalizada (se muestra únicamente al seleccionar 'Personalizada...')
+        self.custom_res_container = QWidget()
+        row_custom = QHBoxLayout(self.custom_res_container)
+        row_custom.setContentsMargins(0, 0, 0, 0)
+        row_custom.setSpacing(16)
+
+        col_cw = QVBoxLayout()
+        col_cw.addWidget(QLabel("📐 Ancho personalizado (px):"))
+        self.spin_custom_w = QSpinBox()
+        self.spin_custom_w.setRange(320, 7680)
+        self.spin_custom_w.setSingleStep(10)
+        self.spin_custom_w.setSuffix(" px")
+        self.spin_custom_w.setValue(1920)
+        col_cw.addWidget(self.spin_custom_w)
+        row_custom.addLayout(col_cw, 1)
+
+        col_ch = QVBoxLayout()
+        col_ch.addWidget(QLabel("Alto personalizado (px):"))
+        self.spin_custom_h = QSpinBox()
+        self.spin_custom_h.setRange(240, 4320)
+        self.spin_custom_h.setSingleStep(10)
+        self.spin_custom_h.setSuffix(" px")
+        self.spin_custom_h.setValue(1080)
+        col_ch.addWidget(self.spin_custom_h)
+        row_custom.addLayout(col_ch, 1)
+
+        v_video.addWidget(self.custom_res_container)
+        self.custom_res_container.setVisible(False)
 
         row_v2 = QHBoxLayout()
         row_v2.setSpacing(16)
@@ -442,7 +480,8 @@ class SystemSettingsWidget(QWidget):
         for idx, scr in enumerate(screens):
             geo = scr.geometry()
             tag = " [Principal]" if scr == primary else ""
-            self.screen_combo.addItem(f"Monitor {idx + 1}: {geo.width()}x{geo.height()}{tag}", idx)
+            self.screen_combo.addItem(f"Monitor {idx + 1}: {geo.width()}x{geo.height()} ({scr.name()}){tag}", idx)
+        self.screen_combo.currentIndexChanged.connect(self._on_screen_changed)
         col4.addWidget(self.screen_combo)
         row_v2.addLayout(col4, 1)
 
@@ -541,6 +580,31 @@ class SystemSettingsWidget(QWidget):
             self.refresh_controls_table()
             self.settings_saved.emit()
 
+    def _on_res_changed(self):
+        is_custom = (self.res_combo.currentData() == "custom")
+        self.custom_res_container.setVisible(is_custom)
+
+    def _on_screen_changed(self):
+        self._update_system_res_label()
+
+    def _update_system_res_label(self):
+        screens = QGuiApplication.screens()
+        mon_idx = self.screen_combo.currentData()
+        if screens and isinstance(mon_idx, int) and 0 <= mon_idx < len(screens):
+            scr = screens[mon_idx]
+        else:
+            scr = QGuiApplication.primaryScreen()
+
+        if scr:
+            geo = scr.geometry()
+            rate = int(round(scr.refreshRate())) if scr.refreshRate() > 0 else 60
+            text = f"Resolución del sistema ({geo.width()} x {geo.height()} @ {rate}Hz — {scr.name()})"
+        else:
+            text = "Resolución del sistema (Nativa del monitor)"
+
+        if self.res_combo.count() > 0 and self.res_combo.itemData(0) == "system":
+            self.res_combo.setItemText(0, text)
+
     def load_settings(self):
         """Carga las opciones de emuladores y pantalla desde la base de datos."""
         if not self.db:
@@ -557,19 +621,36 @@ class SystemSettingsWidget(QWidget):
         if idx_mode != -1:
             self.mode_combo.setCurrentIndex(idx_mode)
 
-        res = self.db.get_setting("video_resolution", "native")
+        res = self.db.get_setting("video_resolution", "system")
+        if res == "native":
+            res = "system"
         idx_res = self.res_combo.findData(res)
         if idx_res != -1:
             self.res_combo.setCurrentIndex(idx_res)
+        else:
+            idx_cust = self.res_combo.findData("custom")
+            if idx_cust != -1:
+                self.res_combo.setCurrentIndex(idx_cust)
+
+        try:
+            custom_w = int(self.db.get_setting("video_custom_width", "1920") or "1920")
+            custom_h = int(self.db.get_setting("video_custom_height", "1080") or "1080")
+        except (ValueError, TypeError):
+            custom_w, custom_h = 1920, 1080
+        self.spin_custom_w.setValue(custom_w)
+        self.spin_custom_h.setValue(custom_h)
+        self.custom_res_container.setVisible(self.res_combo.currentData() == "custom")
 
         driver = self.db.get_setting("video_driver", "d3d11")
         idx_driver = self.driver_combo.findData(driver)
         if idx_driver != -1:
             self.driver_combo.setCurrentIndex(idx_driver)
 
-        target_screen = int(self.db.get_setting("target_screen", "0") or "0")
+        target_screen = int(self.db.get_setting("video_monitor", self.db.get_setting("target_screen", "0") or "0") or "0")
         if 0 <= target_screen < self.screen_combo.count():
             self.screen_combo.setCurrentIndex(target_screen)
+
+        self._update_system_res_label()
 
     def save_all(self):
         """Guarda todas las configuraciones en la base de datos."""
@@ -587,12 +668,16 @@ class SystemSettingsWidget(QWidget):
 
         res = self.res_combo.currentData()
         self.db.set_setting("video_resolution", res)
+        self.db.set_setting("video_custom_width", str(self.spin_custom_w.value()))
+        self.db.set_setting("video_custom_height", str(self.spin_custom_h.value()))
 
         driver = self.driver_combo.currentData()
         self.db.set_setting("video_driver", driver)
 
         target_screen = self.screen_combo.currentData()
-        self.db.set_setting("target_screen", str(target_screen if target_screen is not None else 0))
+        mon_str = str(target_screen if target_screen is not None else 0)
+        self.db.set_setting("video_monitor", mon_str)
+        self.db.set_setting("target_screen", mon_str)
 
         self.settings_saved.emit()
         QMessageBox.information(

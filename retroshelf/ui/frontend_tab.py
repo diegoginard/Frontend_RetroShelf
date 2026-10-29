@@ -13,27 +13,12 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
-    QGroupBox, QFrame, QScrollArea, QTableWidget, QTableWidgetItem,
+    QSpinBox, QGroupBox, QFrame, QScrollArea, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox
 )
 from retroshelf.db import Database
 from retroshelf.ui.layouts import get_available_layouts
-
-SCREEN_MODES = [
-    ("Pantalla completa exclusiva (Fullscreen) — [Recomendado]", "fullscreen"),
-    ("Ventana sin bordes (Borderless Window)", "borderless"),
-    ("Modo ventana estándar", "windowed"),
-]
-
-RESOLUTIONS_LIST = [
-    ("Nativa del monitor (Recomendado)", "native"),
-    ("1920 x 1080 (Full HD 1080p)", "1920x1080"),
-    ("2560 x 1440 (2K QHD)", "2560x1440"),
-    ("3840 x 2160 (4K UHD)", "3840x2160"),
-    ("1280 x 720 (HD 720p)", "1280x720"),
-    ("1024 x 768 (4:3 CRT Retro)", "1024x768"),
-    ("1600 x 900", "1600x900"),
-]
+from retroshelf.ui.settings_tab import SCREEN_MODES, RESOLUTIONS_LIST
 
 
 class FrontendSettingsWidget(QWidget):
@@ -210,7 +195,7 @@ class FrontendSettingsWidget(QWidget):
             geo = scr.geometry()
             tag = " [Principal]" if scr == primary else ""
             self.screen_combo.addItem(f"Monitor {idx + 1}: {geo.width()}x{geo.height()}{tag}", idx)
-        self.screen_combo.currentIndexChanged.connect(self._save_video_settings)
+        self.screen_combo.currentIndexChanged.connect(self._on_screen_changed)
         col_scr.addWidget(self.screen_combo)
         row_v.addLayout(col_scr, 1)
 
@@ -219,11 +204,42 @@ class FrontendSettingsWidget(QWidget):
         self.res_combo = QComboBox()
         for label, val in RESOLUTIONS_LIST:
             self.res_combo.addItem(label, val)
-        self.res_combo.currentIndexChanged.connect(self._save_video_settings)
+        self.res_combo.currentIndexChanged.connect(self._on_res_changed)
         col_res.addWidget(self.res_combo)
         row_v.addLayout(col_res, 1)
 
         v_video.addLayout(row_v)
+
+        # Fila de resolución personalizada (se muestra únicamente al seleccionar 'Personalizada...')
+        self.custom_res_container = QWidget()
+        row_custom = QHBoxLayout(self.custom_res_container)
+        row_custom.setContentsMargins(0, 0, 0, 0)
+        row_custom.setSpacing(16)
+
+        col_cw = QVBoxLayout()
+        col_cw.addWidget(QLabel("📐 Ancho personalizado (px):"))
+        self.spin_custom_w = QSpinBox()
+        self.spin_custom_w.setRange(320, 7680)
+        self.spin_custom_w.setSingleStep(10)
+        self.spin_custom_w.setSuffix(" px")
+        self.spin_custom_w.setValue(1920)
+        self.spin_custom_w.valueChanged.connect(self._save_video_settings)
+        col_cw.addWidget(self.spin_custom_w)
+        row_custom.addLayout(col_cw, 1)
+
+        col_ch = QVBoxLayout()
+        col_ch.addWidget(QLabel("Alto personalizado (px):"))
+        self.spin_custom_h = QSpinBox()
+        self.spin_custom_h.setRange(240, 4320)
+        self.spin_custom_h.setSingleStep(10)
+        self.spin_custom_h.setSuffix(" px")
+        self.spin_custom_h.setValue(1080)
+        self.spin_custom_h.valueChanged.connect(self._save_video_settings)
+        col_ch.addWidget(self.spin_custom_h)
+        row_custom.addLayout(col_ch, 1)
+
+        v_video.addWidget(self.custom_res_container)
+        self.custom_res_container.setVisible(False)
         layout.addWidget(grp_video)
 
         # -------------------------------------------------------------
@@ -320,10 +336,26 @@ class FrontendSettingsWidget(QWidget):
             if 0 <= mon_idx < self.screen_combo.count():
                 self.screen_combo.setCurrentIndex(mon_idx)
 
-            curr_res = self.db.get_setting("video_resolution", "native")
+            curr_res = self.db.get_setting("video_resolution", "system")
+            if curr_res == "native":
+                curr_res = "system"
             idx_res = self.res_combo.findData(curr_res)
             if idx_res >= 0:
                 self.res_combo.setCurrentIndex(idx_res)
+            else:
+                idx_cust = self.res_combo.findData("custom")
+                if idx_cust >= 0:
+                    self.res_combo.setCurrentIndex(idx_cust)
+
+            try:
+                custom_w = int(self.db.get_setting("video_custom_width", "1920") or "1920")
+                custom_h = int(self.db.get_setting("video_custom_height", "1080") or "1080")
+            except (ValueError, TypeError):
+                custom_w, custom_h = 1920, 1080
+            self.spin_custom_w.setValue(custom_w)
+            self.spin_custom_h.setValue(custom_h)
+            self.custom_res_container.setVisible(self.res_combo.currentData() == "custom")
+            self._update_system_res_label()
 
         finally:
             self._updating = False
@@ -480,6 +512,33 @@ class FrontendSettingsWidget(QWidget):
         self.db.update_list(sub_list_id, layout=new_layout)
         self.layout_changed.emit(sub_list_id, new_layout)
 
+    def _on_res_changed(self):
+        is_custom = (self.res_combo.currentData() == "custom")
+        self.custom_res_container.setVisible(is_custom)
+        self._save_video_settings()
+
+    def _on_screen_changed(self):
+        self._update_system_res_label()
+        self._save_video_settings()
+
+    def _update_system_res_label(self):
+        screens = QGuiApplication.screens()
+        mon_idx = self.screen_combo.currentData()
+        if screens and isinstance(mon_idx, int) and 0 <= mon_idx < len(screens):
+            scr = screens[mon_idx]
+        else:
+            scr = QGuiApplication.primaryScreen()
+
+        if scr:
+            geo = scr.geometry()
+            rate = int(round(scr.refreshRate())) if scr.refreshRate() > 0 else 60
+            text = f"Resolución del sistema ({geo.width()} x {geo.height()} @ {rate}Hz — {scr.name()})"
+        else:
+            text = "Resolución del sistema (Nativa del monitor)"
+
+        if self.res_combo.count() > 0 and self.res_combo.itemData(0) == "system":
+            self.res_combo.setItemText(0, text)
+
     def _save_video_settings(self):
         if self._updating:
             return
@@ -491,8 +550,12 @@ class FrontendSettingsWidget(QWidget):
             self.db.set_setting("video_mode", str(mode))
         if mon is not None:
             self.db.set_setting("video_monitor", str(mon))
+            self.db.set_setting("target_screen", str(mon))
         if res is not None:
             self.db.set_setting("video_resolution", str(res))
+        if hasattr(self, "spin_custom_w") and hasattr(self, "spin_custom_h"):
+            self.db.set_setting("video_custom_width", str(self.spin_custom_w.value()))
+            self.db.set_setting("video_custom_height", str(self.spin_custom_h.value()))
 
     def _on_launch_clicked(self):
         self._save_video_settings()

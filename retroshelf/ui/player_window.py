@@ -143,6 +143,10 @@ class PlayerWindow(QMainWindow):
         else:
             color = "#ff4444"
 
+        driver = os.environ.get("QT_RHI_BACKEND", "").upper() or self.db.get_setting("video_driver", "D3D11").upper()
+        if not driver:
+            driver = "GPU"
+
         self.fps_label.setStyleSheet(f"""
             background-color: rgba(12, 14, 20, 0.88);
             color: {color};
@@ -153,7 +157,7 @@ class PlayerWindow(QMainWindow):
             border-radius: 8px;
             border: 1px solid {color}88;
         """)
-        self.fps_label.setText(f"{fps:.1f} FPS ({frame_ms:.1f} ms)")
+        self.fps_label.setText(f"{fps:.1f} FPS ({frame_ms:.1f} ms) • {driver} • {self.width()}x{self.height()}")
         self.fps_label.adjustSize()
         self._reposition_fps_label()
 
@@ -319,7 +323,8 @@ class PlayerWindow(QMainWindow):
         primary = QGuiApplication.primaryScreen()
 
         try:
-            mon_idx = int(self.db.get_setting("video_monitor", "0"))
+            mon_val = self.db.get_setting("video_monitor", self.db.get_setting("target_screen", "0") or "0")
+            mon_idx = int(mon_val or "0")
         except (ValueError, TypeError):
             mon_idx = 0
 
@@ -327,15 +332,15 @@ class PlayerWindow(QMainWindow):
         geo = target_screen.geometry() if target_screen else None
 
         mode = self.db.get_setting("video_mode", "fullscreen")
-        res_key = self.db.get_setting("video_resolution", "native")
+        res_key = self.db.get_setting("video_resolution", "system")
 
         if res_key == "custom":
             try:
-                w = int(self.db.get_setting("video_custom_width", "1920"))
-                h = int(self.db.get_setting("video_custom_height", "1080"))
+                w = int(self.db.get_setting("video_custom_width", "1920") or "1920")
+                h = int(self.db.get_setting("video_custom_height", "1080") or "1080")
             except (ValueError, TypeError):
                 w, h = 1920, 1080
-        elif res_key == "native" or "x" not in str(res_key):
+        elif res_key in ("system", "native") or "x" not in str(res_key):
             if geo:
                 w = geo.width()
                 h = geo.height()
@@ -360,6 +365,7 @@ class PlayerWindow(QMainWindow):
         geo = getattr(self, "_pending_geo", None)
         w = getattr(self, "_pending_w", 1920)
         h = getattr(self, "_pending_h", 1080)
+        res_key = self.db.get_setting("video_resolution", "system")
 
         if mode == "windowed":
             self.showNormal()
@@ -374,10 +380,14 @@ class PlayerWindow(QMainWindow):
             self.raise_()
             self.activateWindow()
         elif mode == "borderless":
-            # Pantalla completa sin bordes (Borderless): usa la geometría exacta del monitor sin mode-switch
+            # Pantalla completa sin bordes (Borderless)
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-            if geo:
+            if geo and (res_key in ("system", "native") or (w == geo.width() and h == geo.height())):
                 self.setGeometry(geo)
+            elif geo:
+                cx = geo.x() + (geo.width() - w) // 2
+                cy = geo.y() + (geo.height() - h) // 2
+                self.setGeometry(cx, cy, w, h)
             else:
                 self.resize(w, h)
             self.show()
