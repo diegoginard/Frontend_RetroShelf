@@ -81,6 +81,13 @@ class ThemeLayout(BaseLayout):
             "extensions": [".png", ".jpg", ".jpeg", ".webp"],
             "required": False,
         },
+        {
+            "key": "bezel",
+            "label": "Bezels",
+            "folder": "bezels",
+            "extensions": [".png", ".webp"],
+            "required": False,
+        },
     ]
 
     # Archivos locales predeterminados del tema
@@ -128,6 +135,7 @@ class ThemeLayout(BaseLayout):
         self._media_cache = {}
         self._current_marquee_pix: QPixmap | None = None
         self._current_cabinet_pix: QPixmap | None = None
+        self._current_bezel_pix: QPixmap | None = None
         self._current_flyer_pix: QPixmap | None = None
         self._pending_video_path: str | None = None
 
@@ -172,9 +180,14 @@ class ThemeLayout(BaseLayout):
         self._wheel_fade_timer.setInterval(1400)  # 1.4 segundos de inactividad
         self._wheel_fade_timer.timeout.connect(self._start_wheel_fadeout)
 
-        # Animación del flyer deslizante al detenerse
+        # Animación del flyer deslizante (aparece 1.5 segundos después de detenerse la ruleta)
         self._flyer_slide = 1.0  # 0.0 = posicionado, 1.0 = fuera de pantalla
         self._flyer_alpha = 255
+        self._flyer_ready = False
+        self._flyer_delay_timer = QTimer(self)
+        self._flyer_delay_timer.setSingleShot(True)
+        self._flyer_delay_timer.setInterval(1500)  # 1.5 segundos tras detenerse el carrusel
+        self._flyer_delay_timer.timeout.connect(self._on_flyer_delay_timeout)
 
         # Efectos de sonido
         self._sound_effect = QSoundEffect(self)
@@ -192,6 +205,8 @@ class ThemeLayout(BaseLayout):
         # Precargar imágenes base del tema
         self._pix_cabinet = self._load_pixmap(self._resolve_file(self.CABINET_IMAGE))
         self._pix_marquee_default = self._load_pixmap(self._resolve_file(self.MARQUEE_IMAGE))
+        self._current_cabinet_pix = self._pix_cabinet
+        self._current_marquee_pix = self._pix_marquee_default
         self._pix_pointer = self._load_pixmap(self._resolve_file(self.POINTER_IMAGE))
         self._pix_wheel_default = self._load_pixmap(self._resolve_file(self.DEFAULT_WHEEL_IMAGE))
         self._pix_scratches = self._load_pixmap(str(COMMON_DIR / "art" / "arcade" / "scratched_cover.png"))
@@ -379,14 +394,27 @@ class ThemeLayout(BaseLayout):
         # 5. Marquee
         marquee_file = self._find_media_file(game_dict.get("marquee_path"), stem, img_exts)
 
+        # 6. Bezel (Marco decorativo sobre el monitor)
+        bezel_folder = game_dict.get("bezel_path")
+        bezel_file = self._find_media_file(bezel_folder, stem, img_exts)
+        if not bezel_file and game_dict.get("media_path"):
+            mp = Path(game_dict["media_path"])
+            for b_cand in ("bezels", "bezel"):
+                cand_dir = mp / b_cand
+                if cand_dir.is_dir():
+                    bezel_file = self._find_media_file(str(cand_dir), stem, img_exts)
+                    if bezel_file:
+                        break
+
         res = {
             "video": video_file,
             "wheel": wheel_file,
             "cabinet": cabinet_file,
             "flyer": flyer_file,
             "marquee": marquee_file,
+            "bezel": bezel_file,
         }
-        if not res["video"] or not res["wheel"]:
+        if not res["video"] or not res["wheel"] or not res["bezel"]:
             fallback = resolve_game_media(game_dict)
             if not res["video"]:
                 res["video"] = fallback.get("video") or fallback.get("snap")
@@ -394,6 +422,8 @@ class ThemeLayout(BaseLayout):
                 res["wheel"] = fallback.get("wheel")
             if not res["flyer"]:
                 res["flyer"] = fallback.get("boxart")
+            if not res["bezel"]:
+                res["bezel"] = fallback.get("bezel")
         self._media_cache[gid] = res
         return res
 
@@ -447,22 +477,34 @@ class ThemeLayout(BaseLayout):
     # -------------------------------------------------------------------------
     # NAVEGACIÓN Y ANIMACIÓN
     # -------------------------------------------------------------------------
-    def _navigate_steps(self, steps: int):
+    def _navigate_steps(self, steps: int, fast_repeat: bool = False):
         if not self.games:
             return
         n = len(self.games)
         new_idx = (self.selected_index + steps) % n
         self.selected_index = new_idx
         self._target_pos += steps
-        self._flyer_slide = 1.0  # Ocultar temporalmente el flyer mientras se navega
+        self._flyer_ready = False
+        self._flyer_slide = 1.0  # Ocultar el flyer mientras se mueve la ruleta
+        self._current_flyer_pix = None
+        self._flyer_delay_timer.start(1500)
         self._pointer_current_x_ratio = self._pointer_pulse_x_ratio
         self._reset_wheel_fade()
         self._play_nav_sound()
-        self._update_selected_media()
+        self._update_selected_media(fast_repeat=fast_repeat)
         gid = self.get_selected_game_id()
         if gid:
             self.game_selected.emit(gid)
         self.update()
+
+    def _on_flyer_delay_timeout(self):
+        if not self.games or not (0 <= self.selected_index < len(self.games)):
+            return
+        flyer_file = self.current_media.get("flyer")
+        self._current_flyer_pix = self._get_cached_art_pixmap(flyer_file) if flyer_file else None
+        if self._current_flyer_pix is not None:
+            self._flyer_ready = True
+            self.update()
 
     def _play_nav_sound(self):
         try:
@@ -491,11 +533,17 @@ class ThemeLayout(BaseLayout):
 
         # 1. Interpolación de la ruleta
         diff = self._target_pos - self._current_pos
-        if abs(diff) > 0.001:
+        if abs(diff) > 0.005:
             self._current_pos += diff * 0.28
             needs_update = True
+            # Mientras el carrusel de wheels sigue girando, reiniciar los 1.5 segundos del flyer
+            self._flyer_ready = False
+            self._flyer_slide = 1.0
+            self._flyer_delay_timer.start(1200)
         else:
-            self._current_pos = self._target_pos
+            if self._current_pos != self._target_pos:
+                self._current_pos = self._target_pos
+                self._flyer_delay_timer.start(1000)
 
         # 2. Desvanecimiento suave de la ruleta (Wheel fadeout)
         a_diff = self._target_wheel_alpha - self._wheel_alpha
@@ -505,13 +553,14 @@ class ThemeLayout(BaseLayout):
         else:
             self._wheel_alpha = self._target_wheel_alpha
 
-        # 3. Deslizamiento suave del flyer (animación de entrada al detenerse)
-        if self._flyer_slide > 0.005:
-            self._flyer_slide += (0.0 - self._flyer_slide) * 0.15
-            needs_update = True
-        elif self._flyer_slide != 0.0:
-            self._flyer_slide = 0.0
-            needs_update = True
+        # 3. Deslizamiento suave del flyer (solo tras cumplirse los 2s desde que se detuvo el carrusel)
+        if self._flyer_ready and self._current_flyer_pix is not None:
+            if self._flyer_slide > 0.005:
+                self._flyer_slide += (0.0 - self._flyer_slide) * 0.15
+                needs_update = True
+            elif self._flyer_slide != 0.0:
+                self._flyer_slide = 0.0
+                needs_update = True
 
         # 4. Pulso suave del puntero al cambiar de juego
         self._pointer_anim_tick += 1
@@ -531,35 +580,43 @@ class ThemeLayout(BaseLayout):
         if path in self._art_pix_cache:
             return self._art_pix_cache[path]
         pix = self._load_pixmap(path)
-        if len(self._art_pix_cache) > 80:
-            self._art_pix_cache.clear()
+        if len(self._art_pix_cache) >= 120:
+            self._art_pix_cache.pop(next(iter(self._art_pix_cache)), None)
         self._art_pix_cache[path] = pix
         return pix
 
     def _load_current_game_art(self):
-        marq_file = self.current_media.get("marquee")
-        self._current_marquee_pix = self._get_cached_art_pixmap(marq_file) if marq_file else self._pix_marquee_default
-        if not self._current_marquee_pix:
-            self._current_marquee_pix = self._pix_marquee_default
-
         custom_cab_file = self.current_media.get("cabinet")
-        self._current_cabinet_pix = self._get_cached_art_pixmap(custom_cab_file) if custom_cab_file else self._pix_cabinet
-        if not self._current_cabinet_pix:
-            self._current_cabinet_pix = self._pix_cabinet
+        custom_cab_pix = self._get_cached_art_pixmap(custom_cab_file) if custom_cab_file else None
+        has_custom_cab = custom_cab_pix is not None
+        self._current_cabinet_pix = custom_cab_pix if has_custom_cab else self._pix_cabinet
 
-        flyer_file = self.current_media.get("flyer")
-        self._current_flyer_pix = self._get_cached_art_pixmap(flyer_file) if flyer_file else None
+        marq_file = self.current_media.get("marquee")
+        marq_pix = self._get_cached_art_pixmap(marq_file) if marq_file else None
+        if marq_pix is not None:
+            self._current_marquee_pix = marq_pix
+        else:
+            self._current_marquee_pix = None if has_custom_cab else self._pix_marquee_default
 
-    def _update_selected_media(self):
+        bezel_file = self.current_media.get("bezel")
+        self._current_bezel_pix = self._get_cached_art_pixmap(bezel_file) if bezel_file else None
+
+    def _update_selected_media(self, fast_repeat: bool = False):
+        self._flyer_ready = False
+        self._flyer_slide = 1.0
+        self._current_flyer_pix = None
+        self._flyer_delay_timer.start(1500)
+
         if not self.games or not (0 <= self.selected_index < len(self.games)):
             self.current_media = {}
             self._current_marquee_pix = self._pix_marquee_default
             self._current_cabinet_pix = self._pix_cabinet
-            self._current_flyer_pix = None
+            self._current_bezel_pix = None
             self._pending_video_path = None
             self._want_game_video_playing = False
             self._video_debounce_timer.stop()
             self._video_watchdog_timer.stop()
+            self._flyer_delay_timer.stop()
             if self.game_audio:
                 self.game_audio.setVolume(0.0)
             self._game_video_image = None
@@ -568,15 +625,16 @@ class ThemeLayout(BaseLayout):
         current_game = self.games[self.selected_index]
         self.current_media = self._resolve_game_media(current_game)
 
-        # Usar caché en RAM si ya existe; si no, diferir lectura de disco al debounce
-        marq_file = self.current_media.get("marquee")
-        self._current_marquee_pix = self._art_pix_cache.get(marq_file, self._pix_marquee_default) if marq_file else self._pix_marquee_default
-
-        custom_cab_file = self.current_media.get("cabinet")
-        self._current_cabinet_pix = self._art_pix_cache.get(custom_cab_file, self._pix_cabinet) if custom_cab_file else self._pix_cabinet
-
-        flyer_file = self.current_media.get("flyer")
-        self._current_flyer_pix = self._art_pix_cache.get(flyer_file) if flyer_file else None
+        # Si se cambia de juego normalmente, cargar cabinet y marquee al instante;
+        # si se mantiene presionado recorriendo rápido la ruleta, diferir lectura de disco al detenerse
+        if not fast_repeat:
+            self._load_current_game_art()
+        else:
+            custom_cab_file = self.current_media.get("cabinet")
+            if custom_cab_file and custom_cab_file in self._art_pix_cache:
+                self._load_current_game_art()
+            elif not custom_cab_file:
+                self._load_current_game_art()
 
         # Reproducir video snap con debounce suave para no bloquear al girar rápido la ruleta
         self._pending_video_path = self.current_media.get("video")
@@ -643,9 +701,9 @@ class ThemeLayout(BaseLayout):
         # Calcular geometría responsiva del mueble arcade (escala a la altura)
         cab_h = h
         cab_w = int(cab_h * (self.CAB_BASE_W / float(self.CAB_BASE_H)))
-        # Limitar ancho del mueble al 62% del ancho para dejar libre el área de ruleta y afiches
-        if cab_w > int(w * 0.62):
-            cab_w = int(w * 0.62)
+        # Limitar ancho del mueble solo si la parte visible (1070/1300) supera el 68% del ancho (w * 0.82)
+        if cab_w > int(w * 0.82):
+            cab_w = int(w * 0.82)
         cab_x = 0
         cab_y = 0
 
@@ -669,7 +727,12 @@ class ThemeLayout(BaseLayout):
         # 2. MONITOR CRT (Capa trasera del monitor)
         painter.fillRect(snap_rect, QColor(0, 0, 0))
         if self._game_video_image:
-            painter.drawImage(snap_rect, self._game_video_image)
+            vw, vh = self._game_video_image.width(), self._game_video_image.height()
+            s = min(snap_rect.width() / vw, snap_rect.height() / vh) if vw > 0 and vh > 0 else 1.0
+            dw, dh = int(vw * s), int(vh * s)
+            vx = snap_rect.x() + (snap_rect.width() - dw) // 2
+            vy = snap_rect.y() + (snap_rect.height() - dh) // 2
+            painter.drawImage(QRect(vx, vy, dw, dh), self._game_video_image)
         else:
             f_pix = self._current_flyer_pix
             if f_pix:
@@ -685,6 +748,10 @@ class ThemeLayout(BaseLayout):
                 painter.setPen(QColor(80, 80, 95))
                 painter.drawText(snap_rect, Qt.AlignCenter, "INSERT COIN\nNO VIDEO SNAP")
 
+        # Capa de Bezel del juego (encima del video snap en el monitor CRT)
+        if self._current_bezel_pix:
+            painter.drawPixmap(snap_rect, self._current_bezel_pix)
+
         # Capa de reflejo / vidrio rayado CRT sobre el monitor
         if self._pix_scratches:
             painter.setOpacity(0.40)
@@ -692,7 +759,7 @@ class ThemeLayout(BaseLayout):
             painter.setOpacity(1.0)
 
         # 3. MARQUEE (Capa trasera de la marquesina)
-        pix_marq = self._current_marquee_pix or self._pix_marquee_default
+        pix_marq = self._current_marquee_pix
         if pix_marq:
             painter.drawPixmap(marquee_rect, pix_marq)
             painter.fillRect(marquee_rect, QColor(255, 255, 255, 25))
@@ -715,20 +782,19 @@ class ThemeLayout(BaseLayout):
         self._draw_footer(painter, w, h)
 
     def _draw_flyer(self, painter: QPainter, w: int, h: int):
+        if not self._flyer_ready:
+            return
         pix = self._current_flyer_pix
         if not pix:
             return
 
-        target_w = int(w * 0.22)
-        target_h = int(h * 0.52)
-        target_x = int(w * 0.70) + int(self._flyer_slide * (w * 0.35))
-        target_y = int(h * 0.38)
+        # Flyer 30% más grande que el tamaño original (0.22 * 1.30 y 0.52 * 1.30)
+        target_w = int(w * 0.22 * 1.30)
+        target_h = int(h * 0.52 * 1.30)
+        target_x = int(w * 0.67) + int(self._flyer_slide * (w * 0.35))
+        target_y = int(h * 0.26)
 
         flyer_rect = QRect(target_x, target_y, target_w, target_h)
-
-        # Sombra del afiche
-        shadow_rect = flyer_rect.adjusted(-6, 8, 8, 12)
-        painter.fillRect(shadow_rect, QColor(0, 0, 0, 160))
 
         pw, ph = pix.width(), pix.height()
         s = min(target_w / pw, target_h / ph) if pw > 0 and ph > 0 else 1.0
@@ -736,10 +802,6 @@ class ThemeLayout(BaseLayout):
         ax = flyer_rect.x() + (flyer_rect.width() - dw) // 2
         ay = flyer_rect.y() + (flyer_rect.height() - dh) // 2
         painter.drawPixmap(QRect(ax, ay, dw, dh), pix)
-
-        # Marco fino alrededor del afiche
-        painter.setPen(QColor(255, 255, 255, 40))
-        painter.drawRect(ax, ay, dw, dh)
 
     def _draw_wheel(self, painter: QPainter, w: int, h: int):
         if not self.games:
@@ -862,17 +924,18 @@ class ThemeLayout(BaseLayout):
     # -------------------------------------------------------------------------
     def keyPressEvent(self, event):
         key = event.key()
+        fast = event.isAutoRepeat()
         if matches_action(event, ACTION_NAV_UP):
-            self._navigate_steps(-1)
+            self._navigate_steps(-1, fast_repeat=fast)
             event.accept()
         elif matches_action(event, ACTION_NAV_DOWN):
-            self._navigate_steps(1)
+            self._navigate_steps(1, fast_repeat=fast)
             event.accept()
         elif matches_action(event, ACTION_PAGE_UP):
-            self._navigate_steps(-5)
+            self._navigate_steps(-5, fast_repeat=fast)
             event.accept()
         elif matches_action(event, ACTION_PAGE_DOWN):
-            self._navigate_steps(5)
+            self._navigate_steps(5, fast_repeat=fast)
             event.accept()
         elif matches_action(event, ACTION_SELECT) or key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             gid = self.get_selected_game_id()

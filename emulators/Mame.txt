@@ -1,0 +1,7 @@
+# Configuración de Emulador: Mame
+id = 12
+name = Mame
+executable = C:/Attract/Emu/Mame_oficial/mame.exe
+arguments = "{rom}" -skip_gameinfo
+platform = VArios sistemas arcade
+created_at = 2026-10-28 18:13:02

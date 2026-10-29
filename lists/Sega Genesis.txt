@@ -455,7 +455,6 @@ menu_items =
 1475;Kunio no Nekketsu School Fighters (W);Kunio no Nekketsu School Fighters (W);D:\\Roms\\Sega Genesis\\Roms\\Kunio no Nekketsu School Fighters (W).zip;;;;;;;;;;;;{};2026-10-25 23:10:46
 1476;Labbaye des Morts (W);Labbaye des Morts (W);D:\\Roms\\Sega Genesis\\Roms\\Labbaye des Morts (W).zip;;;;;;;;;;;;{};2026-10-25 23:10:46
 1477;Lakers versus Celtics and the NBA Playoffs (U);Lakers versus Celtics and the NBA Playoffs (U);D:\\Roms\\Sega Genesis\\Roms\\Lakers versus Celtics and the NBA Playoffs (U).zip;;;;;;;;;;;;{};2026-10-25 23:10:46
-1478;Landstalker (U);Landstalker (U);D:\\Roms\\Sega Genesis\\Roms\\Landstalker (U).zip;;;;;;;;;;;;{};2026-10-25 23:10:46
 1479;Langrisser II (J)[Tesp];Langrisser II (J)[Tesp];D:\\Roms\\Sega Genesis\\Roms\\Langrisser II (J)[Tesp].zip;;;;;;;;;;;;{};2026-10-25 23:10:46
 1480;Last Action Hero (U,E);Last Action Hero (U,E);D:\\Roms\\Sega Genesis\\Roms\\Last Action Hero (U,E).zip;;;;;;;;;;;;{};2026-10-25 23:10:46
 1481;Last Battle (U,E)[Tesp];Last Battle (U,E)[Tesp];D:\\Roms\\Sega Genesis\\Roms\\Last Battle (U,E)[Tesp].zip;;;;;;;;;;;;{};2026-10-25 23:10:46
@@ -1004,3 +1003,4 @@ menu_items =
 2024;Zooming Secretary - Going Panic (W);Zooming Secretary - Going Panic (W);D:\\Roms\\Sega Genesis\\Roms\\Zooming Secretary - Going Panic (W).zip;;;;;;;;;;;;{};2026-10-25 23:10:52
 2025;Zoop (U);Zoop (U);D:\\Roms\\Sega Genesis\\Roms\\Zoop (U).zip;;;;;;;;;;;;{};2026-10-25 23:10:52
 2026;ZPF (W);ZPF (W);D:\\Roms\\Sega Genesis\\Roms\\ZPF (W).zip;;;;;;;;;;;;{};2026-10-25 23:10:52
+4821;Landstalker - The Treasures of King Nole (E)[Tesp];Landstalker - The Treasures of King Nole (E)[Tesp];D:\\Roms\\Sega Genesis\\Roms\\Landstalker - The Treasures of King Nole (E)[Tesp].zip;;;;;;;;;;;;{};2026-10-28 17:22:02

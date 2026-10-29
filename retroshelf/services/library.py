@@ -40,6 +40,14 @@ def normalize_extensions(raw_text: str) -> tuple[str, list[str]]:
         if not token:
             continue
 
+        # Aceptar token especial <DIR> para carpetas de juegos (ej: MAME)
+        if token.lower() in ("<dir>", "dir", "<directory>"):
+            token_clean = "<DIR>"
+            if token_clean not in seen:
+                seen.add(token_clean)
+                normalized_list.append(token_clean)
+            continue
+
         # Aceptar con o sin punto inicial
         if not token.startswith("."):
             token = f".{token}"
@@ -51,7 +59,7 @@ def normalize_extensions(raw_text: str) -> tuple[str, list[str]]:
         if not re.match(r"^\.[a-z0-9_\-\.]{1,20}$", token) or token == ".":
             raise ValueError(
                 f"La extensión '{raw_token.strip()}' tiene un formato inválido.\n"
-                "Solo debe contener letras, números y el punto inicial (ej: .gba, .sfc, .iso)."
+                "Solo debe contener letras, números y el punto inicial (ej: .gba, .sfc, .zip o <DIR>)."
             )
 
         # Evitar duplicados manteniendo orden
@@ -72,17 +80,21 @@ def normalize_extensions(raw_text: str) -> tuple[str, list[str]]:
 def parse_extensions_list(extensions_str: str) -> list[str]:
     """
     Convierte la cadena almacenada en la base de datos (separada por ;) en una lista de extensiones en minúsculas.
+    Preserva el token especial '<dir>'.
     """
     if not extensions_str:
         return []
     result = []
     for ext in extensions_str.split(";"):
         clean = ext.strip().lower()
-        if clean:
-            if not clean.startswith("."):
-                clean = f".{clean}"
-            if clean not in result:
-                result.append(clean)
+        if not clean:
+            continue
+        if clean in ("<dir>", "dir", "<directory>"):
+            token = "<dir>"
+        else:
+            token = clean if clean.startswith(".") else f".{clean}"
+        if token not in result:
+            result.append(token)
     return result
 
 
@@ -128,6 +140,8 @@ def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: l
     """
     Escanea recursivamente una o varias carpetas en busca de archivos cuyas extensiones
     coincidan con la lista permitida para la lista seleccionada.
+    Soporta el token especial '<DIR>' (utilizado en MAME y arcade):
+    Toma como ROM las carpetas que no tienen un archivo .zip (o archivo coincidente) con su mismo nombre.
     """
     folder_list = parse_rom_folders(folder)
     valid_roots: list[Path] = []
@@ -142,10 +156,15 @@ def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: l
     if isinstance(allowed_extensions, str):
         allowed_list = parse_extensions_list(allowed_extensions)
     else:
-        allowed_list = [
-            (e.lower() if e.startswith(".") else f".{e.lower()}").strip()
-            for e in allowed_extensions if e.strip()
-        ]
+        allowed_list = []
+        for e in allowed_extensions:
+            clean = str(e).strip().lower()
+            if not clean:
+                continue
+            if clean in ("<dir>", "dir", "<directory>"):
+                allowed_list.append("<dir>")
+            else:
+                allowed_list.append(clean if clean.startswith(".") else f".{clean}")
 
     allowed_set = set(allowed_list)
     if not allowed_set:
@@ -154,18 +173,61 @@ def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: l
             "Editá la lista y configurá las extensiones permitidas separadas por ';' antes de escanear."
         )
 
+    has_dir_token = "<dir>" in allowed_set
+    file_ext_set = {e for e in allowed_set if e != "<dir>"}
+
     matched: list[Path] = []
     seen_resolved: set[str] = set()
+
     for root in valid_roots:
-        for dirpath, _dirnames, filenames in os.walk(str(root)):
+        for dirpath, dirnames, filenames in os.walk(str(root), topdown=True):
+            # 1. Escanear archivos normales con extensiones permitidas
+            dir_zip_stems = set()
             for fname in filenames:
-                _, ext = os.path.splitext(fname)
-                if ext.lower() in allowed_set:
+                f_stem, ext = os.path.splitext(fname)
+                ext_lower = ext.lower()
+                f_stem_lower = f_stem.lower()
+
+                # Registrar los nombres base de zips/archivos en este directorio
+                if ext_lower in (".zip", ".7z") or ext_lower in file_ext_set:
+                    dir_zip_stems.add(f_stem_lower)
+
+                if ext_lower in file_ext_set:
                     full_str = os.path.abspath(os.path.join(dirpath, fname))
                     res_key = full_str.lower()
                     if res_key not in seen_resolved:
                         seen_resolved.add(res_key)
                         matched.append(Path(full_str))
+
+            # 2. Si <DIR> está habilitado, procesar subcarpetas
+            if has_dir_token:
+                dirs_to_prune = []
+                for d in dirnames:
+                    # Ignorar carpetas ocultas, del sistema o auxiliares comunes
+                    if d.startswith(".") or d.startswith("$") or d.lower() in (
+                        "__pycache__", "artwork", "samples", "ini", "cfg", "snap",
+                        "titles", "flyers", "marquees", "cpanel", "history"
+                    ):
+                        dirs_to_prune.append(d)
+                        continue
+
+                    d_lower = d.lower()
+                    # Si ya existe un .zip (o archivo coincidente) con el mismo nombre en la carpeta,
+                    # la carpeta no es una ROM independiente (es la carpeta CHD/auxiliar del .zip).
+                    if d_lower in dir_zip_stems:
+                        dirs_to_prune.append(d)
+                    else:
+                        # No tiene .zip con su mismo nombre: la carpeta en sí se toma como ROM
+                        full_dir_str = os.path.abspath(os.path.join(dirpath, d))
+                        res_key = full_dir_str.lower()
+                        if res_key not in seen_resolved:
+                            seen_resolved.add(res_key)
+                            matched.append(Path(full_dir_str))
+                        # No recursar dentro de la carpeta que ya es una ROM
+                        dirs_to_prune.append(d)
+
+                for d in dirs_to_prune:
+                    dirnames.remove(d)
 
     return sorted(matched, key=lambda p: str(p).lower())
 
@@ -616,10 +678,17 @@ def apply_xml_to_list(db, list_id: int, xml_path: str | Path | None = None, xml_
     }
 
 
-def import_scanned_games(db, list_id: int, paths: list[Path], xml_path: str | Path | None = None) -> dict:
+def import_scanned_games(
+    db,
+    list_id: int,
+    paths: list[Path],
+    xml_path: str | Path | None = None,
+    replace: bool = True,
+) -> dict:
     """
-    Importa una lista de rutas de juegos a una lista determinada en texto plano,
-    evitando duplicar archivos ya importados previamente.
+    Importa una lista de rutas de juegos a una lista determinada en texto plano.
+    Cuando replace=True (por defecto al escanear/reescanear), reemplaza la lista anterior
+    por los juegos encontrados en el escaneo actual para que no queden juegos inexistentes.
     Si la lista tiene un archivo XML asociado (o se recibe xml_path), asigna el
     nombre completo y todas las propiedades del XML a cada ROM coincidente.
     Retorna un diccionario con el resumen de la importación.
@@ -634,14 +703,27 @@ def import_scanned_games(db, list_id: int, paths: list[Path], xml_path: str | Pa
         xml_map = parse_rom_xml(xml_path)
 
     rows = db.get_games(list_id, enriched=False)
-    existing_by_path = {os.path.abspath(str(r["rom_path"])).lower(): dict(r) for r in rows}
+    previous_by_path = {os.path.abspath(str(r["rom_path"])).lower(): dict(r) for r in rows}
 
     added = 0
     skipped = 0
+    removed = 0
     xml_matched = 0
 
     batch_ctx = db.batch() if hasattr(db, "batch") else nullcontext()
     with batch_ctx:
+        if replace:
+            scanned_keys = {os.path.abspath(str(p)).lower() for p in paths}
+            removed = sum(1 for k in previous_by_path if k not in scanned_keys)
+            if hasattr(db, "clear_list_games"):
+                db.clear_list_games(list_id)
+            else:
+                for r in rows:
+                    db.delete_game(r["id"])
+            existing_by_path: dict[str, dict] = {}
+        else:
+            existing_by_path = dict(previous_by_path)
+
         for path in paths:
             try:
                 resolved = os.path.abspath(str(path))
@@ -651,7 +733,6 @@ def import_scanned_games(db, list_id: int, paths: list[Path], xml_path: str | Pa
 
                 if resolved_lower in existing_by_path:
                     skipped += 1
-                    # Si ya existía pero ahora tenemos información del XML, actualizar su nombre completo y propiedades
                     if info:
                         ex_row = existing_by_path[resolved_lower]
                         new_title = info.get("title") or rom_stem
@@ -675,6 +756,8 @@ def import_scanned_games(db, list_id: int, paths: list[Path], xml_path: str | Pa
                         xml_matched += 1
                     continue
 
+                prev_row = previous_by_path.get(resolved_lower, {})
+
                 if info:
                     title = info.get("title") or rom_stem
                     rom_name = info.get("rom_name") or rom_stem
@@ -685,21 +768,21 @@ def import_scanned_games(db, list_id: int, paths: list[Path], xml_path: str | Pa
                     cloneof = info.get("cloneof", "")
                     rating = info.get("rating", "")
                     crc = info.get("crc", "")
-                    notes = info.get("notes", "")
+                    notes = prev_row.get("notes") or info.get("notes", "")
                     xml_metadata = json.dumps(info.get("properties", {}), ensure_ascii=False)
                     xml_matched += 1
                 else:
-                    title = rom_stem
-                    rom_name = rom_stem
-                    year = ""
-                    manufacturer = ""
-                    genre = ""
-                    players = ""
-                    cloneof = ""
-                    rating = ""
-                    crc = ""
-                    notes = ""
-                    xml_metadata = "{}"
+                    title = prev_row.get("title") or rom_stem
+                    rom_name = prev_row.get("rom_name") or rom_stem
+                    year = prev_row.get("year", "")
+                    manufacturer = prev_row.get("manufacturer", "")
+                    genre = prev_row.get("genre", "")
+                    players = prev_row.get("players", "")
+                    cloneof = prev_row.get("cloneof", "")
+                    rating = prev_row.get("rating", "")
+                    crc = prev_row.get("crc", "")
+                    notes = prev_row.get("notes", "")
+                    xml_metadata = prev_row.get("xml_metadata") or "{}"
 
                 new_id = db.insert_game(
                     list_id,
@@ -713,6 +796,9 @@ def import_scanned_games(db, list_id: int, paths: list[Path], xml_path: str | Pa
                     cloneof=cloneof,
                     rating=rating,
                     crc=crc,
+                    emulator_override_id=prev_row.get("emulator_override_id"),
+                    launch_arguments=prev_row.get("launch_arguments", ""),
+                    cover_path=prev_row.get("cover_path", ""),
                     notes=notes,
                     xml_metadata=xml_metadata,
                 )
@@ -725,6 +811,7 @@ def import_scanned_games(db, list_id: int, paths: list[Path], xml_path: str | Pa
         "total_found": len(paths),
         "added": added,
         "skipped": skipped,
+        "removed": removed,
         "xml_matched": xml_matched,
         "xml_total_entries": len(xml_map),
     }

@@ -99,6 +99,7 @@ LIST_DEFAULTS = {
     "cartart_path": "",
     "cabinet_path": "",
     "marquee_path": "",
+    "bezel_path": "",
     "xml_path": "",
     "created_at": "",
 }
@@ -841,6 +842,7 @@ class Database:
             d["cartart_path"] = lst.get("cartart_path", "")
             d["cabinet_path"] = lst.get("cabinet_path", "")
             d["marquee_path"] = lst.get("marquee_path", "")
+            d["bezel_path"] = lst.get("bezel_path", "")
             d["media_path"] = lst.get("media_path", "")
 
             ovr_id = g.get("emulator_override_id")
@@ -927,3 +929,15 @@ class Database:
             self._store._dirty_lists.add(lid)
             self._store.flush()
         return gid
+
+    def clear_list_games(self, list_id: int) -> int:
+        """Elimina todos los juegos registrados en la lista indicada y actualiza su archivo .txt."""
+        lid = int(list_id)
+        old_games = self._store.games_by_list.get(lid, [])
+        removed = len(old_games)
+        for g in old_games:
+            self._store.games_by_id.pop(g["id"], None)
+        self._store.games_by_list[lid] = []
+        self._store._dirty_lists.add(lid)
+        self._store.flush()
+        return removed

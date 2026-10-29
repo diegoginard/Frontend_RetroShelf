@@ -485,6 +485,7 @@ class MainWindow(QMainWindow):
             cabinet_path = vals[14] if len(vals) > 14 else ""
             marquee_path = vals[15] if len(vals) > 15 else ""
             xml_path = vals[16] if len(vals) > 16 else ""
+            bezel_path = vals[17] if len(vals) > 17 else ""
             try:
                 list_id = self.db.add_list(
                     name=name,
@@ -500,6 +501,7 @@ class MainWindow(QMainWindow):
                     cartart_path=cartart_path,
                     cabinet_path=cabinet_path,
                     marquee_path=marquee_path,
+                    bezel_path=bezel_path,
                     list_type=list_type,
                     xml_path=xml_path,
                 )
@@ -548,6 +550,10 @@ class MainWindow(QMainWindow):
             cabinet_path = vals[14] if len(vals) > 14 else ""
             marquee_path = vals[15] if len(vals) > 15 else ""
             xml_path = vals[16] if len(vals) > 16 else ""
+            bezel_path = vals[17] if len(vals) > 17 else ""
+            old_roms_path = format_rom_folders(row["roms_path"] if "roms_path" in row.keys() else "")
+            old_exts = (row["allowed_extensions"] if "allowed_extensions" in row.keys() else "") or ""
+            folders_changed = format_rom_folders(folder) != old_roms_path or exts != old_exts
             try:
                 self.db.update_list(
                     self.current_list_id,
@@ -564,6 +570,7 @@ class MainWindow(QMainWindow):
                     cartart_path=cartart_path,
                     cabinet_path=cabinet_path,
                     marquee_path=marquee_path,
+                    bezel_path=bezel_path,
                     list_type=list_type,
                     xml_path=xml_path,
                 )
@@ -571,20 +578,24 @@ class MainWindow(QMainWindow):
                     self.db.set_menu_items(self.current_list_id, selected_list_ids)
 
                 rom_folders = [f for f in parse_rom_folders(folder) if Path(f).is_dir()]
-                if list_type == "games" and rom_folders and auto_scan:
+                if list_type == "games" and rom_folders and (auto_scan or folders_changed):
                     try:
                         self.statusBar().showMessage(f"Escaneando carpeta(s) de '{name}'…")
                         QApplication.setOverrideCursor(Qt.WaitCursor)
                         paths = scan_rom_folder(rom_folders, exts)
-                        stats = import_scanned_games(self.db, self.current_list_id, paths, xml_path=xml_path)
+                        stats = import_scanned_games(self.db, self.current_list_id, paths, xml_path=xml_path, replace=True)
                         QApplication.restoreOverrideCursor()
                         self.refresh_lists(select_id=self.current_list_id)
                         summary = ScanSummaryDialog(self, stats, format_rom_folders(rom_folders), name, exts)
                         summary.exec()
-                        self.statusBar().showMessage(f"Lista '{name}' actualizada. {stats['added']} juego(s) nuevos importados.", 5000)
+                        self.statusBar().showMessage(f"Lista '{name}' actualizada con {stats['added']} juego(s).", 5000)
                     except Exception as err:
                         QApplication.restoreOverrideCursor()
                         QMessageBox.warning(self, "Aviso de escaneo", f"Se actualizó la lista pero ocurrió un error al escanear las carpetas:\n{err}")
+                elif list_type == "games" and not rom_folders and (auto_scan or folders_changed):
+                    self.db.clear_list_games(self.current_list_id)
+                    self.refresh_lists(select_id=self.current_list_id)
+                    self.statusBar().showMessage(f"Lista '{name}' actualizada (sin carpetas de ROMs).", 4000)
                 elif list_type == "games" and xml_path and Path(xml_path).is_file():
                     try:
                         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -957,10 +968,13 @@ class MainWindow(QMainWindow):
             self.game_meta_info.setToolTip("")
 
         if rom_p.exists():
-            size_mb = rom_p.stat().st_size / (1024 * 1024)
-            self.game_size.setText(f"{size_mb:.2f} MB ({rom_p.suffix.lower()})")
+            if rom_p.is_dir():
+                self.game_size.setText("Carpeta ROM (<DIR>)")
+            else:
+                size_mb = rom_p.stat().st_size / (1024 * 1024)
+                self.game_size.setText(f"{size_mb:.2f} MB ({rom_p.suffix.lower()})")
         else:
-            self.game_size.setText("<span style='color: #ef4444;'>Archivo no encontrado en disco</span>")
+            self.game_size.setText("<span style='color: #ef4444;'>Archivo o carpeta no encontrada en disco</span>")
 
         # Configurar combo de emulador individual
         self.override_combo.blockSignals(True)
@@ -1080,7 +1094,7 @@ class MainWindow(QMainWindow):
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
             paths = scan_rom_folder(folders_to_scan, allowed_str)
-            stats = import_scanned_games(self.db, self.current_list_id, paths)
+            stats = import_scanned_games(self.db, self.current_list_id, paths, replace=True)
 
             QApplication.restoreOverrideCursor()
             self.refresh_lists(select_id=self.current_list_id)
@@ -1090,7 +1104,7 @@ class MainWindow(QMainWindow):
             summary.exec()
 
             self.statusBar().showMessage(
-                f"Escaneo finalizado: {stats['added']} agregados, {stats['skipped']} omitidos.",
+                f"Escaneo finalizado: {stats['added']} juego(s) en la lista.",
                 5000
             )
         except Exception as e:

@@ -25,7 +25,7 @@ PRESET_EXTENSIONS = {
     "Nintendo 64 (N64)": ("Nintendo 64", ".z64;.n64;.v64;.zip"),
     "Nintendo DS (NDS)": ("Nintendo DS", ".nds;.zip;.7z"),
     "PSP": ("PlayStation Portable", ".iso;.cso;.pbp"),
-    "Arcade (MAME / FBNeo)": ("Arcade", ".zip;.7z;.chd")
+    "Arcade (MAME / FBNeo)": ("Arcade", ".zip;.7z;<DIR>")
 }
 
 class ListDialog(QDialog):
@@ -97,12 +97,12 @@ class ListDialog(QDialog):
         game_form.addRow("Plantilla sugerida", self.preset_combo)
 
         self.extensions_edit = QLineEdit()
-        self.extensions_edit.setPlaceholderText("Ej: .sfc;.smc;.zip (separadas por ;)")
+        self.extensions_edit.setPlaceholderText("Ej: .zip;.7z;<DIR> o .cue;.chd (separadas por ;)")
         game_form.addRow("Extensiones admitidas *", self.extensions_edit)
 
         ext_hint = QLabel(
             "<b>Obligatorio:</b> Escribí las extensiones permitidas separadas <b>exclusivamente por punto y coma (;)</b>.<br>"
-            "<i>Ejemplo: .cue;.bin;.chd;.iso</i>"
+            "<i>Ejemplo: .zip;.7z;<DIR> (en MAME <code>&lt;DIR&gt;</code> toma las subcarpetas como ROMs cuando no tienen un .zip con su mismo nombre).</i>"
         )
         ext_hint.setStyleSheet("color: #aab1c0; font-size: 9pt;")
         ext_hint.setWordWrap(True)
@@ -337,6 +337,9 @@ class ListDialog(QDialog):
                 self._media_values["cabinet"] = existing["cabinet_path"]
             if "marquee_path" in existing.keys() and existing["marquee_path"]:
                 self._media_values["marquee"] = existing["marquee_path"]
+            if "bezel_path" in existing.keys() and existing["bezel_path"]:
+                self._media_values["bezel"] = existing["bezel_path"]
+                self._media_values["bezels"] = existing["bezel_path"]
         else:
             self.type_combo.setCurrentIndex(0)
 
@@ -730,6 +733,7 @@ class ListDialog(QDialog):
         cartart_path = self._media_values.get("cartart", "")
         cabinet_path = self._media_values.get("cabinet", "")
         marquee_path = self._media_values.get("marquee", "")
+        bezel_path = self._media_values.get("bezel") or self._media_values.get("bezels") or ""
         xml_path = self.xml_edit.text().strip() if (list_type == "games" and hasattr(self, "xml_edit")) else ""
         roms_path_val = format_rom_folders(self.get_rom_folders()) if list_type == "games" else ""
 
@@ -751,6 +755,7 @@ class ListDialog(QDialog):
             cabinet_path,
             marquee_path,
             xml_path,
+            bezel_path,
         )
 
 
@@ -1043,8 +1048,11 @@ class ScanSummaryDialog(QDialog):
         form.addRow(folders_label_title, lbl_folders)
         form.addRow("Extensiones permitidas:", QLabel(allowed_exts))
         form.addRow("Archivos coincidentes encontrados:", QLabel(f"<b>{stats['total_found']}</b>"))
-        form.addRow("Juegos nuevos agregados:", QLabel(f"<b style='color: #4cd964;'>{stats['added']}</b>"))
-        form.addRow("Archivos omitidos (ya existentes):", QLabel(f"<b>{stats['skipped']}</b>"))
+        form.addRow("Juegos registrados en la lista:", QLabel(f"<b style='color: #4cd964;'>{stats['added']}</b>"))
+        if stats.get("removed", 0) > 0:
+            form.addRow("Juegos anteriores eliminados:", QLabel(f"<b style='color: #f87171;'>{stats['removed']}</b>"))
+        if stats.get("skipped", 0) > 0:
+            form.addRow("Archivos omitidos:", QLabel(f"<b>{stats['skipped']}</b>"))
         if stats.get("xml_total_entries", 0) > 0 or stats.get("xml_matched", 0) > 0:
             xml_matched = stats.get("xml_matched", 0)
             xml_total = stats.get("xml_total_entries", 0)

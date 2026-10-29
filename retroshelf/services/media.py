@@ -56,7 +56,10 @@ def detect_media_folders(base_path: str | Path | None, media_root: str | Path | 
         "boxart_path": "",
         "wheel_path": "",
         "video_path": "",
-        "cartart_path": ""
+        "cartart_path": "",
+        "cabinet_path": "",
+        "marquee_path": "",
+        "bezel_path": "",
     }
 
     target_dir = None
@@ -86,7 +89,7 @@ def detect_media_folders(base_path: str | Path | None, media_root: str | Path | 
     for item in media_spec:
         key = item.get("key", "")
         target_field = f"{key}_path"
-        if target_field not in detected or detected[target_field]:
+        if detected.get(target_field):
             continue
 
         folder_name = (item.get("folder") or key).lower()
@@ -151,7 +154,10 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
         "wheel": None,
         "video": None,
         "snap": None,
-        "cartart": None
+        "cartart": None,
+        "cabinet": None,
+        "marquee": None,
+        "bezel": None,
     }
 
     rom_path = ""
@@ -210,6 +216,19 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
         cart_folder = row_dict.get("cartart_path")
         if cart_folder:
             media["cartart"] = find_media_file(cart_folder, stem, IMAGE_EXTS)
+
+        # 5. Cabinet, Marquee y Bezel
+        cab_folder = row_dict.get("cabinet_path")
+        if cab_folder:
+            media["cabinet"] = find_media_file(cab_folder, stem, IMAGE_EXTS)
+
+        marq_folder = row_dict.get("marquee_path")
+        if marq_folder:
+            media["marquee"] = find_media_file(marq_folder, stem, IMAGE_EXTS)
+
+        bezel_folder = row_dict.get("bezel_path")
+        if bezel_folder:
+            media["bezel"] = find_media_file(bezel_folder, stem, IMAGE_EXTS)
 
     # Resolución de medios para Menú de Sistemas (cuando el item representa una lista/consola)
     if (not stem or row_dict.get("is_menu_target")) and row_dict:

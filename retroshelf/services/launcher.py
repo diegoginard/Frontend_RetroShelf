@@ -39,11 +39,11 @@ def launch_game(db, game, layout=None, parent_window=None):
 
     rom = Path(game["rom_path"])
     if not rom.exists():
-        raise FileNotFoundError(f"No se encontró el archivo del juego en el disco:\n{rom}")
+        raise FileNotFoundError(f"No se encontró el archivo o carpeta del juego en el disco:\n{rom}")
 
     rom_str = str(rom)
     rom_dir_str = str(rom.parent)
-    rom_name_str = rom.stem
+    rom_name_str = rom.name if rom.is_dir() else rom.stem
 
     # Prioridad de argumentos: argumentos personalizados del juego > argumentos del emulador > '"{rom}"'
     custom_args = (game["launch_arguments"] or "").strip()
@@ -87,8 +87,8 @@ def launch_game(db, game, layout=None, parent_window=None):
         pass
 
     # Si la plantilla no contenía ningún marcador de la ROM, añadirla automáticamente al final
-    if rom_str not in rendered:
-        rendered = f'{rendered} "{rom_str}"'.strip()
+    if rom_str not in rendered and rom_name_str not in rendered:
+        rendered = f'{rendered} "{rom_name_str if rom.is_dir() else rom_str}"'.strip()
 
     # Separar argumentos en Windows sin invocar cmd/shell
     args = shlex.split(rendered, posix=False)
