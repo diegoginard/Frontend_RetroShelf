@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, Signal, QThread
 from retroshelf.services.controls import (
     ACTIONS_INFO, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_LETTER, ACTION_NAV_STEP5,
     ACTION_NAV_BACK, ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN, ACTION_CLOSE_EMULATOR,
-    ACTION_MUTE, GAMEPAD_ACTION_ALIASES, get_gamepad_binding, matches_gamepad_action
+    ACTION_MUTE, ACTION_TOGGLE_FPS, GAMEPAD_ACTION_ALIASES, get_gamepad_binding, matches_gamepad_action
 )
 
 # Estructuras para XInput

@@ -17,7 +17,8 @@ from retroshelf.services.launcher import launch_game
 from retroshelf.services.controls import (
     ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_LETTER, ACTION_NAV_STEP5,
     ACTION_NAV_BACK, ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN,
-    ACTION_MUTE, ACTION_CLOSE_EMULATOR, matches_action
+    ACTION_MUTE, ACTION_CLOSE_EMULATOR, ACTION_TOGGLE_FPS, matches_action,
+    get_binding
 )
 from retroshelf.services.gamepad import get_gamepad_manager
 from retroshelf.ui.layouts import LAYOUT_REGISTRY, get_available_layouts, create_layout, resolve_theme_name
@@ -87,7 +88,8 @@ class PlayerWindow(QMainWindow):
         """)
         self.fps_label.setText("FPS: --")
         self.fps_label.adjustSize()
-        self.fps_label.show()
+        show_fps_cfg = self.db.get_setting("video_show_fps", "false").lower() in ("true", "1", "yes")
+        self.fps_label.setVisible(show_fps_cfg)
 
         # Timer para actualizar lectura de FPS cada 250ms
         self._fps_timer = QTimer(self)
@@ -98,9 +100,11 @@ class PlayerWindow(QMainWindow):
     def _setup_shortcuts(self):
         # F11 para alternar pantalla completa
         QShortcut(QKeySequence(Qt.Key_F11), self, self.toggle_fullscreen)
-        # F10 y F3 para alternar el contador de FPS
-        QShortcut(QKeySequence(Qt.Key_F10), self, self.toggle_fps_counter)
-        QShortcut(QKeySequence(Qt.Key_F3), self, self.toggle_fps_counter)
+        # Atajo dinámico para alternar FPS (por defecto F10) y alias secundario F3
+        fps_key_str = get_binding(self.db, ACTION_TOGGLE_FPS) or "F10"
+        self._fps_shortcut = QShortcut(QKeySequence(fps_key_str), self, self.toggle_fps_counter)
+        if fps_key_str.strip().upper() != "F3":
+            self._fps_shortcut_alt = QShortcut(QKeySequence(Qt.Key_F3), self, self.toggle_fps_counter)
         # Escape y Backspace para retroceder / salir
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.go_back)
         QShortcut(QKeySequence(Qt.Key_Backspace), self, self.go_back)
@@ -123,6 +127,8 @@ class PlayerWindow(QMainWindow):
             self.fps_label.raise_()
 
     def _update_fps_display(self):
+        if not hasattr(self, "fps_label") or not self.fps_label or self.fps_label.isHidden():
+            return
         now = time.perf_counter()
         while self._frame_times and (now - self._frame_times[0]) > 1.0:
             self._frame_times.popleft()
@@ -166,9 +172,16 @@ class PlayerWindow(QMainWindow):
         self._reposition_fps_label()
 
     def toggle_fps_counter(self):
-        """Muestra u oculta el contador de FPS en pantalla."""
+        """Muestra u oculta el contador de FPS en pantalla y persiste la preferencia."""
         if hasattr(self, "fps_label") and self.fps_label:
-            self.fps_label.setVisible(not self.fps_label.isVisible())
+            new_vis = self.fps_label.isHidden()
+            self.fps_label.setVisible(new_vis)
+            if new_vis:
+                self._update_fps_display()
+            try:
+                self.db.set_setting("video_show_fps", "true" if new_vis else "false")
+            except Exception:
+                pass
 
     def stop_all_active_media(self):
         """Detiene completamente cualquier reproducción activa en TODOS los layouts para evitar audio residual."""
@@ -225,7 +238,11 @@ class PlayerWindow(QMainWindow):
         self.close()
 
     def keyPressEvent(self, event):
-        if matches_action(event, ACTION_NAV_BACK, self.db) or matches_action(event, ACTION_CLOSE_EMULATOR, self.db):
+        if matches_action(event, ACTION_TOGGLE_FPS, self.db):
+            self.toggle_fps_counter()
+            event.accept()
+            return
+        elif matches_action(event, ACTION_NAV_BACK, self.db) or matches_action(event, ACTION_CLOSE_EMULATOR, self.db):
             self.go_back()
             event.accept()
             return
@@ -246,6 +263,13 @@ class PlayerWindow(QMainWindow):
     def _on_gamepad_action(self, action_id: str):
         """Procesa acciones provenientes de cualquier mando/joystick conectado."""
         if not self.isActiveWindow():
+            return
+
+        if action_id == ACTION_TOGGLE_FPS:
+            self.toggle_fps_counter()
+            return
+        elif action_id == ACTION_NAV_BACK or action_id == ACTION_CLOSE_EMULATOR:
+            self.go_back()
             return
 
         current_layout = self.layout_stack.currentWidget()
@@ -311,9 +335,6 @@ class PlayerWindow(QMainWindow):
                     self._on_game_activated(gid)
             elif self.current_game_id:
                 self._on_game_activated(self.current_game_id)
-
-        elif action_id == ACTION_NAV_BACK or action_id == ACTION_CLOSE_EMULATOR:
-            self.go_back()
 
         elif action_id == ACTION_MUTE:
             if hasattr(current_layout, "set_muted"):

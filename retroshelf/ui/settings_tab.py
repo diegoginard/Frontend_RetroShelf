@@ -491,6 +491,18 @@ class SystemSettingsWidget(QWidget):
         lbl_driver_hint.setStyleSheet("color: #9aa5b8; font-size: 8.5pt;")
         v_video.addWidget(lbl_driver_hint)
 
+        # Opción para activar / desactivar contador de FPS en el frontend
+        self.chk_show_fps = QCheckBox("Mostrar contador de FPS y rendimiento en el frontend (Overlay)")
+        self.chk_show_fps.setStyleSheet("font-weight: 500; font-size: 10pt; margin-top: 6px;")
+        v_video.addWidget(self.chk_show_fps)
+
+        lbl_fps_hint = QLabel(
+            "Muestra en tiempo real los fotogramas por segundo (FPS), tiempo de render, resolución y motor gráfico. "
+            "Podés activarlo/desactivarlo aquí o en cualquier momento mediante la tecla o botón asignado en la tabla de controles superior."
+        )
+        lbl_fps_hint.setStyleSheet("color: #718096; font-size: 8.5pt; margin-left: 24px;")
+        v_video.addWidget(lbl_fps_hint)
+
         layout.addWidget(grp_video)
 
         # Barra inferior de guardado
@@ -650,6 +662,8 @@ class SystemSettingsWidget(QWidget):
         if 0 <= target_screen < self.screen_combo.count():
             self.screen_combo.setCurrentIndex(target_screen)
 
+        self.chk_show_fps.setChecked(self.db.get_setting("video_show_fps", "false").lower() == "true")
+
         self._update_system_res_label()
 
     def save_all(self):
@@ -678,6 +692,8 @@ class SystemSettingsWidget(QWidget):
         mon_str = str(target_screen if target_screen is not None else 0)
         self.db.set_setting("video_monitor", mon_str)
         self.db.set_setting("target_screen", mon_str)
+
+        self.db.set_setting("video_show_fps", "true" if self.chk_show_fps.isChecked() else "false")
 
         self.settings_saved.emit()
         QMessageBox.information(

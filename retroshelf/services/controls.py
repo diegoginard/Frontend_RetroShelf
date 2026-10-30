@@ -17,6 +17,7 @@ ACTION_PAGE_UP = "page_up"
 ACTION_PAGE_DOWN = "page_down"
 ACTION_SELECT = "select_game"
 ACTION_MUTE = "mute_video"
+ACTION_TOGGLE_FPS = "toggle_fps"
 
 # Metadatos de cada acción (nombre para mostrar, descripción, tecla por defecto y botón mando por defecto)
 ACTIONS_INFO = [
@@ -89,6 +90,13 @@ ACTIONS_INFO = [
         "desc": "Alterna el sonido del video snap en el diseño visual",
         "default": "M",
         "default_pad": "Y",
+    },
+    {
+        "id": ACTION_TOGGLE_FPS,
+        "name": "Mostrar / Ocultar FPS (Overlay)",
+        "desc": "Alterna la visualización del contador de FPS, tiempo de render y resolución en pantalla",
+        "default": "F10",
+        "default_pad": "R-Thumb",
     },
 ]
 
@@ -188,6 +196,7 @@ ACTION_ALIASES = {
     ACTION_PAGE_UP: [Qt.Key_PageUp],
     ACTION_PAGE_DOWN: [Qt.Key_PageDown],
     ACTION_SELECT: [Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space],
+    ACTION_TOGGLE_FPS: [Qt.Key_F10, Qt.Key_F3],
 }
 
 # Alias secundarios por defecto para mandos y joysticks
@@ -202,6 +211,7 @@ GAMEPAD_ACTION_ALIASES = {
     ACTION_PAGE_DOWN: ["RB", "Button 6"],
     ACTION_CLOSE_EMULATOR: ["Back+Start"],
     ACTION_MUTE: ["Y", "Button 4"],
+    ACTION_TOGGLE_FPS: ["R-Thumb", "Button 10", "R3", "RS"],
 }
 
 
