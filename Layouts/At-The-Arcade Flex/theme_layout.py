@@ -227,6 +227,9 @@ class ThemeLayout(BaseLayout):
         self._current_bezel_pix: QPixmap | None = None
         self._current_flyer_pix: QPixmap | None = None
         self._pending_video_path: str | None = None
+        static_vid = COMMON_DIR / "videos" / "static.mp4"
+        self._static_video_path = str(static_vid) if static_vid.is_file() else None
+        self._pending_video_is_snap = False
 
         self._video_debounce_timer = QTimer(self)
         self._video_debounce_timer.setSingleShot(True)
@@ -434,8 +437,10 @@ class ThemeLayout(BaseLayout):
         if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
             if self._want_game_video_playing and self.isVisible():
                 if self.game_audio:
-                    self.game_audio.setMuted(self._media_muted)
-                    self.game_audio.setVolume(0.0 if self._media_muted else 0.8)
+                    is_snap = getattr(self, "_pending_video_is_snap", True)
+                    should_mute = bool(self._media_muted or not is_snap)
+                    self.game_audio.setMuted(should_mute)
+                    self.game_audio.setVolume(0.0 if should_mute else 0.8)
                 if self.game_player.playbackState() != QMediaPlayer.PlayingState:
                     self.game_player.play()
             else:
@@ -697,11 +702,13 @@ class ThemeLayout(BaseLayout):
             except Exception:
                 pass
 
-        if self.game_player and self.current_media and self.current_media.get("video"):
+        if self.game_player and self._pending_video_path and os.path.isfile(self._pending_video_path):
             try:
                 if self.game_audio:
-                    self.game_audio.setMuted(self._media_muted)
-                    self.game_audio.setVolume(0.0 if self._media_muted else 0.8)
+                    is_snap = getattr(self, "_pending_video_is_snap", True)
+                    should_mute = bool(self._media_muted or not is_snap)
+                    self.game_audio.setMuted(should_mute)
+                    self.game_audio.setVolume(0.0 if should_mute else 0.8)
                 if self.game_player.playbackState() != QMediaPlayer.PlayingState:
                     self.game_player.play()
                 self._video_watchdog_timer.start()
@@ -1014,18 +1021,29 @@ class ThemeLayout(BaseLayout):
         if not self.games or not (0 <= self.selected_index < len(self.games)):
             return
         video_path = self.current_media.get("video") if self.current_media else None
-        self._pending_video_path = video_path
+        target_video = None
+        is_snap = False
+        if video_path and os.path.isfile(video_path):
+            target_video = video_path
+            is_snap = True
+        elif self._static_video_path and os.path.isfile(self._static_video_path):
+            target_video = self._static_video_path
+            is_snap = False
+
+        self._pending_video_path = target_video
+        self._pending_video_is_snap = is_snap
         if not self.isVisible():
             return
-        if video_path and os.path.isfile(video_path):
+        if target_video and os.path.isfile(target_video):
             self._init_game_player()
             if self.game_player:
                 self._want_game_video_playing = True
                 if self.game_audio:
-                    self.game_audio.setMuted(self._media_muted)
-                    self.game_audio.setVolume(0.0 if self._media_muted else 0.8)
+                    should_mute = bool(self._media_muted or not is_snap)
+                    self.game_audio.setMuted(should_mute)
+                    self.game_audio.setVolume(0.0 if should_mute else 0.8)
                 try:
-                    src_url = QUrl.fromLocalFile(video_path)
+                    src_url = QUrl.fromLocalFile(target_video)
                     if self.game_player.source() == src_url:
                         self.game_player.setPosition(0)
                     else:
@@ -1118,20 +1136,6 @@ class ThemeLayout(BaseLayout):
             vx = snap_rect.x() + (snap_rect.width() - dw) // 2
             vy = snap_rect.y() + (snap_rect.height() - dh) // 2
             painter.drawImage(QRect(vx, vy, dw, dh), self._game_video_image)
-        else:
-            has_video = bool(self.current_media and self.current_media.get("video"))
-            if not has_video and self._current_flyer_pix:
-                pw, ph = self._current_flyer_pix.width(), self._current_flyer_pix.height()
-                s = min(snap_rect.width() / pw, snap_rect.height() / ph) if pw > 0 and ph > 0 else 1.0
-                dw, dh = int(pw * s), int(ph * s)
-                cx = snap_rect.x() + (snap_rect.width() - dw) // 2
-                cy = snap_rect.y() + (snap_rect.height() - dh) // 2
-                painter.drawPixmap(QRect(cx, cy, dw, dh), self._current_flyer_pix)
-            elif not has_video:
-                f_ph = QFont(self._font_dots, max(12, int(h * 0.024)), QFont.Bold)
-                painter.setFont(f_ph)
-                painter.setPen(QColor(80, 80, 95))
-                painter.drawText(snap_rect, Qt.AlignCenter, "INSERT COIN\nNO VIDEO SNAP")
 
         # Capa de Bezel del juego (encima del video snap en el monitor CRT)
         if self._current_bezel_pix:
