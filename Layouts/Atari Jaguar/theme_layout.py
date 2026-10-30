@@ -204,7 +204,7 @@ class ThemeLayout(BaseLayout):
         self._pix_boxart_frame = self._load_pixmap(self._resolve_file(self.BOXART_IMAGE)) if self.BOXART_IMAGE else None
 
         # Recursos compartidos directos desde gtc-common
-        self._pix_scanlines = self._load_pixmap(str(COMMON_DIR / "art" / "scanlines_1920.png"))
+        self._pix_scanlines = None
         self._pix_wheel_art = self._load_pixmap(str(COMMON_DIR / "art" / "wheel_art.png"))
         self._pix_frame = self._load_pixmap(str(COMMON_DIR / "art" / "frame.png"))
         static_vid = COMMON_DIR / "videos" / "static.mp4"
