@@ -242,38 +242,49 @@ class PlayerWindow(QMainWindow):
                             pass
 
     def go_back(self):
-        """Retrocede en el historial de navegación (listas de listas o menús), o cierra la ventana si está en la raíz."""
+        """Retrocede en el historial de navegación (listas de listas o menús). Si está en la raíz, no sale del sistema."""
+        if not self.navigation_history:
+            return
+
         # Detener inmediatamente el audio y video de TODOS los layouts antes de retroceder
         self.stop_all_active_media()
 
-        if self.navigation_history:
-            prev_entry = self.navigation_history.pop()
-            prev_lid = None
-            prev_gid = None
-            if isinstance(prev_entry, (tuple, list)):
-                prev_lid = prev_entry[0]
-                if len(prev_entry) > 1:
-                    prev_gid = prev_entry[1]
-            elif isinstance(prev_entry, dict):
-                prev_lid = prev_entry.get("list_id") or prev_entry.get("id")
-                prev_gid = prev_entry.get("selected_game_id")
-            elif isinstance(prev_entry, int):
-                prev_lid = prev_entry
+        prev_entry = self.navigation_history.pop()
+        prev_lid = None
+        prev_gid = None
+        if isinstance(prev_entry, (tuple, list)):
+            prev_lid = prev_entry[0]
+            if len(prev_entry) > 1:
+                prev_gid = prev_entry[1]
+        elif isinstance(prev_entry, dict):
+            prev_lid = prev_entry.get("list_id") or prev_entry.get("id")
+            prev_gid = prev_entry.get("selected_game_id")
+        elif isinstance(prev_entry, int):
+            prev_lid = prev_entry
 
-            if prev_lid:
-                self.select_list(int(prev_lid), push_history=False, restore_game_id=prev_gid)
-            return
-
-        # Si no hay historial previo (estamos en el menú o lista de inicio), salir del frontend
-        self.close()
+        if prev_lid:
+            self.select_list(int(prev_lid), push_history=False, restore_game_id=prev_gid)
 
     def keyPressEvent(self, event):
         if matches_action(event, ACTION_TOGGLE_FPS, self.db):
             self.toggle_fps_counter()
             event.accept()
             return
-        elif matches_action(event, ACTION_NAV_BACK, self.db) or matches_action(event, ACTION_CLOSE_EMULATOR, self.db):
-            self.go_back()
+        elif matches_action(event, ACTION_NAV_BACK, self.db):
+            if self.navigation_history:
+                self.go_back()
+                event.accept()
+                return
+            # Si estamos en la raíz y la tecla coincide específicamente con cerrar emulador/frontend (ej: Escape)
+            if matches_action(event, ACTION_CLOSE_EMULATOR, self.db):
+                self.close()
+                event.accept()
+                return
+            # Si es la tecla/botón asignado para volver atrás, no salir del frontend
+            event.accept()
+            return
+        elif matches_action(event, ACTION_CLOSE_EMULATOR, self.db):
+            self.close()
             event.accept()
             return
         elif matches_action(event, ACTION_NAV_LETTER, self.db):
@@ -298,8 +309,12 @@ class PlayerWindow(QMainWindow):
         if action_id == ACTION_TOGGLE_FPS:
             self.toggle_fps_counter()
             return
-        elif action_id == ACTION_NAV_BACK or action_id == ACTION_CLOSE_EMULATOR:
-            self.go_back()
+        elif action_id == ACTION_NAV_BACK:
+            if self.navigation_history:
+                self.go_back()
+            return
+        elif action_id == ACTION_CLOSE_EMULATOR:
+            self.close()
             return
 
         current_layout = self.layout_stack.currentWidget()
