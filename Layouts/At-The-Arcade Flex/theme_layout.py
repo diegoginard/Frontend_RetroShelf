@@ -265,6 +265,7 @@ class ThemeLayout(BaseLayout):
         self.game_audio = None
         self.game_sink = None
         self._media_muted = False
+        self._is_emulator_running = False
 
         # Animación suave de la ruleta (posición interpolada a 60 FPS con precisión de temporizador)
         self._current_pos = 0.0
@@ -338,7 +339,7 @@ class ThemeLayout(BaseLayout):
                 if fam:
                     self._font_bebas = fam[0]
 
-        f_dots = LAYOUT_DIR / "BigSquareDots.ttf"
+        f_dots = LAYOUT_DIR / "Handel Gothic BT.ttf"
         if f_dots.is_file():
             fid2 = QFontDatabase.addApplicationFont(str(f_dots))
             if fid2 != -1:
@@ -428,7 +429,7 @@ class ThemeLayout(BaseLayout):
         self._init_game_player()
 
     def _on_game_media_status_changed(self, status):
-        if not self.game_player:
+        if not self.game_player or getattr(self, "_is_emulator_running", False):
             return
         if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
             if self._want_game_video_playing and self.isVisible():
@@ -453,9 +454,12 @@ class ThemeLayout(BaseLayout):
                 self.game_player.play()
 
     def _on_game_player_error(self, error, error_string=""):
-        self._game_video_image = None
+        if not getattr(self, "_is_emulator_running", False):
+            self._game_video_image = None
 
     def _on_game_video_watchdog(self):
+        if getattr(self, "_is_emulator_running", False):
+            return
         if not self._want_game_video_playing or not self._pending_video_path or not self.isVisible():
             return
         if not os.path.isfile(self._pending_video_path) or not self.game_player:
@@ -472,7 +476,9 @@ class ThemeLayout(BaseLayout):
                 pass
 
     def _on_game_frame(self, frame):
-        if frame.isValid() and self._want_game_video_playing and self.game_player:
+        if frame.isValid() and self.game_player:
+            if not self._want_game_video_playing and not getattr(self, "_is_emulator_running", False):
+                return
             if self._pending_video_path and self.game_player.source() != QUrl.fromLocalFile(self._pending_video_path):
                 return
             is_moving = abs(self._target_pos - self._current_pos) > 0.01 or (time.perf_counter() - getattr(self, "_last_nav_time", 0.0) < 0.20)
@@ -653,7 +659,61 @@ class ThemeLayout(BaseLayout):
         if self.game_audio:
             self.game_audio.setVolume(0.0 if muted else 0.8)
 
+    def pause_media(self):
+        """Pausa el video gameplay y silencia el audio mientras el emulador está en ejecución."""
+        self._is_emulator_running = True
+        self._want_game_video_playing = False
+        self._video_debounce_timer.stop()
+        self._video_watchdog_timer.stop()
+        if hasattr(self, "_art_debounce_timer"):
+            self._art_debounce_timer.stop()
+        if self.game_audio:
+            try:
+                self.game_audio.setMuted(True)
+                self.game_audio.setVolume(0.0)
+            except Exception:
+                pass
+        if self.game_player:
+            try:
+                self.game_player.pause()
+            except Exception:
+                pass
+        if getattr(self, "bg_player", None):
+            try:
+                self.bg_player.pause()
+            except Exception:
+                pass
+        # IMPORTANTE: NO borrar self._game_video_image para que el último frame siga visible en el monitor CRT
+        self.update()
+
+    def resume_media(self):
+        """Reanuda la reproducción de video y audio cuando el emulador finaliza."""
+        self._is_emulator_running = False
+        self._want_game_video_playing = True
+        if getattr(self, "bg_player", None):
+            try:
+                if self.bg_player.playbackState() != QMediaPlayer.PlayingState:
+                    self.bg_player.play()
+            except Exception:
+                pass
+
+        if self.game_player and self.current_media and self.current_media.get("video"):
+            try:
+                if self.game_audio:
+                    self.game_audio.setMuted(self._media_muted)
+                    self.game_audio.setVolume(0.0 if self._media_muted else 0.8)
+                if self.game_player.playbackState() != QMediaPlayer.PlayingState:
+                    self.game_player.play()
+                self._video_watchdog_timer.start()
+            except Exception:
+                pass
+        elif self.games and 0 <= self.selected_index < len(self.games):
+            self._start_game_video()
+
+        self.update()
+
     def stop_media(self):
+        self._is_emulator_running = False
         self._want_game_video_playing = False
         self._video_debounce_timer.stop()
         self._video_watchdog_timer.stop()
@@ -674,6 +734,8 @@ class ThemeLayout(BaseLayout):
         self._init_bg_player()
         if self.bg_player and self.bg_player.playbackState() != QMediaPlayer.PlayingState:
             self.bg_player.play()
+        if getattr(self, "_is_emulator_running", False):
+            return
         if self.games and 0 <= self.selected_index < len(self.games):
             self._update_current_selection(start_video=True)
             self._reset_wheel_fade()
@@ -681,7 +743,10 @@ class ThemeLayout(BaseLayout):
 
     def hideEvent(self, event):
         super().hideEvent(event)
-        self.stop_media()
+        if not getattr(self, "_is_emulator_running", False):
+            self.stop_media()
+        else:
+            self.pause_media()
         if getattr(self, "bg_player", None):
             try:
                 self.bg_player.pause()
@@ -1054,15 +1119,15 @@ class ThemeLayout(BaseLayout):
             vy = snap_rect.y() + (snap_rect.height() - dh) // 2
             painter.drawImage(QRect(vx, vy, dw, dh), self._game_video_image)
         else:
-            f_pix = self._current_flyer_pix
-            if f_pix:
-                pw, ph = f_pix.width(), f_pix.height()
+            has_video = bool(self.current_media and self.current_media.get("video"))
+            if not has_video and self._current_flyer_pix:
+                pw, ph = self._current_flyer_pix.width(), self._current_flyer_pix.height()
                 s = min(snap_rect.width() / pw, snap_rect.height() / ph) if pw > 0 and ph > 0 else 1.0
                 dw, dh = int(pw * s), int(ph * s)
                 cx = snap_rect.x() + (snap_rect.width() - dw) // 2
                 cy = snap_rect.y() + (snap_rect.height() - dh) // 2
-                painter.drawPixmap(QRect(cx, cy, dw, dh), f_pix)
-            else:
+                painter.drawPixmap(QRect(cx, cy, dw, dh), self._current_flyer_pix)
+            elif not has_video:
                 f_ph = QFont(self._font_dots, max(12, int(h * 0.024)), QFont.Bold)
                 painter.setFont(f_ph)
                 painter.setPen(QColor(80, 80, 95))

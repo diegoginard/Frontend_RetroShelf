@@ -82,13 +82,16 @@ class EmulatorManager(QObject):
         self.global_exit_enabled = (db.get_setting("emulator_global_exit", "true").lower() == "true") if db else True
         self.gamepad_exit_enabled = (db.get_setting("emulator_gamepad_exit", "true").lower() == "true") if db else True
 
-        # 1. Silenciar video del layout si está configurado
-        if self.mute_on_run and self.active_layout:
+        # 1. Pausar video y silenciar audio del layout mientras el emulador se ejecuta
+        if self.active_layout:
             try:
-                if hasattr(self.active_layout, "set_media_muted"):
-                    self.active_layout.set_media_muted(True)
-                elif hasattr(self.active_layout, "audio_output") and self.active_layout.audio_output:
-                    self.active_layout.audio_output.setMuted(True)
+                if hasattr(self.active_layout, "pause_media"):
+                    self.active_layout.pause_media()
+                elif self.mute_on_run:
+                    if hasattr(self.active_layout, "set_media_muted"):
+                        self.active_layout.set_media_muted(True)
+                    elif hasattr(self.active_layout, "audio_output") and self.active_layout.audio_output:
+                        self.active_layout.audio_output.setMuted(True)
             except Exception:
                 pass
 
@@ -169,10 +172,12 @@ class EmulatorManager(QObject):
         self._timer.stop()
         self.active_proc = None
 
-        # 1. Reactivar sonido del video en el layout
+        # 1. Reanudar video y audio en el layout activo
         if self.active_layout:
             try:
-                if hasattr(self.active_layout, "set_media_muted"):
+                if hasattr(self.active_layout, "resume_media"):
+                    self.active_layout.resume_media()
+                elif hasattr(self.active_layout, "set_media_muted"):
                     self.active_layout.set_media_muted(False)
                 elif hasattr(self.active_layout, "audio_output") and self.active_layout.audio_output:
                     self.active_layout.audio_output.setMuted(False)
@@ -182,6 +187,8 @@ class EmulatorManager(QObject):
         # 2. Restaurar foco y traer RetroShelf al primer plano
         if self.parent_window:
             try:
+                if hasattr(self.parent_window, "resume_active_media"):
+                    self.parent_window.resume_active_media()
                 self.parent_window.show()
                 self.parent_window.raise_()
                 self.parent_window.activateWindow()

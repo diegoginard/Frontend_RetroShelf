@@ -92,6 +92,79 @@ class BaseLayout(QWidget):
         except Exception:
             pass
 
+    def pause_media(self):
+        """Pausa la reproducción multimedia y silencia el audio mientras el emulador está activo."""
+        self._is_emulator_running = True
+        if hasattr(self, "_want_game_video_playing"):
+            self._want_game_video_playing = False
+        if hasattr(self, "_want_video_playing"):
+            self._want_video_playing = False
+        for timer_name in ("_video_debounce_timer", "_video_watchdog_timer", "video_timer"):
+            if hasattr(self, timer_name):
+                try:
+                    getattr(self, timer_name).stop()
+                except Exception:
+                    pass
+        for audio_name in ("audio_output", "game_audio", "_audio_output"):
+            if hasattr(self, audio_name):
+                ao = getattr(self, audio_name)
+                if ao:
+                    try:
+                        ao.setMuted(True)
+                        ao.setVolume(0.0)
+                    except Exception:
+                        pass
+        for player_name in ("player", "game_player", "bg_player", "_player"):
+            if hasattr(self, player_name):
+                p = getattr(self, player_name)
+                if p:
+                    try:
+                        p.pause()
+                    except Exception:
+                        pass
+        try:
+            self.update()
+        except Exception:
+            pass
+
+    def resume_media(self):
+        """Reanuda la reproducción multimedia y el audio cuando el emulador finaliza."""
+        self._is_emulator_running = False
+        if hasattr(self, "_want_game_video_playing"):
+            self._want_game_video_playing = True
+        if hasattr(self, "_want_video_playing"):
+            self._want_video_playing = True
+        for audio_name in ("audio_output", "game_audio", "_audio_output"):
+            if hasattr(self, audio_name):
+                ao = getattr(self, audio_name)
+                if ao:
+                    try:
+                        is_muted = getattr(self, "_media_muted", False)
+                        ao.setMuted(is_muted)
+                        ao.setVolume(0.0 if is_muted else 0.8)
+                    except Exception:
+                        pass
+        for player_name in ("player", "game_player", "bg_player", "_player"):
+            if hasattr(self, player_name):
+                p = getattr(self, player_name)
+                if p:
+                    try:
+                        from PySide6.QtMultimedia import QMediaPlayer
+                        if p.playbackState() != QMediaPlayer.PlayingState:
+                            p.play()
+                    except Exception:
+                        pass
+        for timer_name in ("_video_watchdog_timer",):
+            if hasattr(self, timer_name):
+                try:
+                    getattr(self, timer_name).start()
+                except Exception:
+                    pass
+        try:
+            self.update()
+        except Exception:
+            pass
+
     def set_media_muted(self, muted: bool):
         """Silencia o restaura el audio multimedia del layout."""
         pass

@@ -183,6 +183,36 @@ class PlayerWindow(QMainWindow):
             except Exception:
                 pass
 
+    def pause_active_media(self):
+        """Pausa la reproducción en el layout activo al iniciar un emulador (sin destruir el video)."""
+        active_layout = self.layout_stack.currentWidget()
+        if active_layout:
+            if hasattr(active_layout, "pause_media") and callable(active_layout.pause_media):
+                try:
+                    active_layout.pause_media()
+                except Exception:
+                    pass
+            elif hasattr(active_layout, "set_media_muted") and callable(active_layout.set_media_muted):
+                try:
+                    active_layout.set_media_muted(True)
+                except Exception:
+                    pass
+
+    def resume_active_media(self):
+        """Reanuda la reproducción en el layout activo al cerrar el emulador."""
+        active_layout = self.layout_stack.currentWidget()
+        if active_layout:
+            if hasattr(active_layout, "resume_media") and callable(active_layout.resume_media):
+                try:
+                    active_layout.resume_media()
+                except Exception:
+                    pass
+            elif hasattr(active_layout, "set_media_muted") and callable(active_layout.set_media_muted):
+                try:
+                    active_layout.set_media_muted(False)
+                except Exception:
+                    pass
+
     def stop_all_active_media(self):
         """Detiene completamente cualquier reproducción activa en TODOS los layouts para evitar audio residual."""
         for inst in list(self.active_layouts.values()):
@@ -626,11 +656,12 @@ class PlayerWindow(QMainWindow):
             return
 
         try:
-            self.stop_all_active_media()
+            self.pause_active_media()
             QApplication.processEvents()
             active_layout = self.layout_stack.currentWidget()
             launch_game(self.db, db_game, layout=active_layout, parent_window=self)
         except Exception as e:
+            self.resume_active_media()
             QMessageBox.critical(self, "No se pudo iniciar el juego", str(e))
 
     def closeEvent(self, event):
