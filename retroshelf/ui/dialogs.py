@@ -413,8 +413,6 @@ class ListDialog(QDialog):
                 field_name = f"{k}_path"
                 if field_name in existing.keys() and existing[field_name]:
                     self._media_values[k] = self._normalize_path(existing[field_name])
-            if "flyer" not in self._media_values and existing.get("boxart_path"):
-                self._media_values["flyer"] = self._normalize_path(existing["boxart_path"])
 
             if list_type == "filtered":
                 src_id = existing.get("source_list_id")
@@ -695,8 +693,6 @@ class ListDialog(QDialog):
             edit.setPlaceholderText(f"Carpeta de {label} (ej: media/{folder_name})...")
             
             init_val = self._media_values.get(key, "")
-            if not init_val and key == "flyer" and "boxart" in self._media_values:
-                init_val = self._media_values.get("boxart", "")
             if init_val:
                 edit.setText(init_val)
 
@@ -719,7 +715,11 @@ class ListDialog(QDialog):
 
     @property
     def boxart_edit(self):
-        return self.media_edits.get("boxart") or self.media_edits.get("flyer")
+        return self.media_edits.get("boxart")
+
+    @property
+    def flyer_edit(self):
+        return self.media_edits.get("flyer")
 
     @property
     def wheel_edit(self):
