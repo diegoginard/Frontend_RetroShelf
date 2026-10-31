@@ -95,7 +95,7 @@ class FrontendSettingsWidget(QWidget):
         col_layout.addWidget(QLabel("<b>Diseño visual de inicio:</b>"))
         self.startup_layout_combo = QComboBox()
         self.startup_layout_combo.setMinimumHeight(34)
-        self.startup_layout_combo.addItems(get_available_layouts())
+        self.startup_layout_combo.addItems(get_available_layouts(for_frontend=True))
         self.startup_layout_combo.currentTextChanged.connect(self._on_startup_layout_changed)
         col_layout.addWidget(self.startup_layout_combo)
         row_start.addLayout(col_layout, 1)
@@ -293,10 +293,15 @@ class FrontendSettingsWidget(QWidget):
                 lid = r["id"]
                 name = r["name"]
                 is_menu = (r["list_type"] == "menu") if "list_type" in r.keys() else False
+                is_filtered = (r["list_type"] == "filtered") if "list_type" in r.keys() else False
 
                 if is_menu:
                     sub_count = len(self.db.get_menu_items(lid))
                     text = f"🧭 [Menú de Sistemas]  {name}  ({sub_count} sistemas vinculados)"
+                elif is_filtered:
+                    g_count = r.get("game_count", 0)
+                    plat = r.get("platform") or "Sin plataforma"
+                    text = f"⚡ [Lista Filtrada]  {name}  ({g_count} juegos) — {plat}"
                 else:
                     g_count = r.get("game_count", 0)
                     plat = r.get("platform") or "Sin plataforma"
@@ -392,8 +397,10 @@ class FrontendSettingsWidget(QWidget):
         if not row:
             return
 
-        # Sincronizar combo de layout del inicio
+        # Sincronizar combo de layout del inicio (Detalles no se permite en frontend)
         curr_layout = row["layout"] or "Wheel"
+        if curr_layout == "Detalles":
+            curr_layout = "Wheel"
         self.startup_layout_combo.blockSignals(True)
         idx = self.startup_layout_combo.findText(curr_layout)
         if idx >= 0:
@@ -453,7 +460,7 @@ class FrontendSettingsWidget(QWidget):
         self.sublists_table.setVisible(True)
         self.sublists_table.setRowCount(len(sub_items))
 
-        available_layouts = get_available_layouts()
+        available_layouts = get_available_layouts(for_frontend=True)
 
         for row_idx, item in enumerate(sub_items):
             item_id = item["id"]
@@ -461,6 +468,8 @@ class FrontendSettingsWidget(QWidget):
             platform = item.get("platform") or "—"
             game_count = self.db.count_games(item_id)
             current_layout = item.get("layout") or "Wheel"
+            if current_layout == "Detalles":
+                current_layout = "Wheel"
 
             # 0. Nombre
             name_item = QTableWidgetItem(f"🎮  {name}")

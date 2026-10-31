@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication, QFont
 from PySide6.QtWidgets import (
@@ -10,9 +11,9 @@ from PySide6.QtWidgets import (
 )
 from retroshelf.services.library import (
     normalize_extensions, parse_extensions_list, parse_rom_xml,
-    parse_rom_folders, format_rom_folders
+    parse_rom_folders, format_rom_folders,
+    FILTERABLE_FIELDS, FILTER_OPERATORS, game_matches_filter
 )
-from retroshelf.services.media import detect_media_folders
 from retroshelf.services.themes import get_layout_media_spec
 
 PRESET_EXTENSIONS = {
@@ -32,13 +33,15 @@ class ListDialog(QDialog):
     """
     Diálogo para crear o editar una lista de juegos o un Menú de Sistemas (lista de listas).
     """
-    def __init__(self, emulators, parent=None, existing=None, all_lists=None, initial_menu_items=None):
+    def __init__(self, emulators, parent=None, existing=None, all_lists=None, initial_menu_items=None, db=None):
         super().__init__(parent)
         self.existing = existing
         self.all_lists = all_lists or []
         self.initial_menu_items = initial_menu_items or []
+        self.db = db or getattr(parent, "db", None)
+        self.filter_rule_rows = []
         self.setWindowTitle("Editar lista / menú" if existing else "Crear nueva lista / menú")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(640)
         self.normalized_exts = ""
 
         # Layout principal del diálogo
@@ -71,6 +74,7 @@ class ListDialog(QDialog):
         self.type_combo = QComboBox()
         self.type_combo.addItem("🎮 Lista de juegos (ROMs y emulador)", "games")
         self.type_combo.addItem("🧭 Menú de sistemas (Lista de listas)", "menu")
+        self.type_combo.addItem("⚡ Lista filtrada (a partir de otra lista)", "filtered")
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         form.addRow("Tipo de lista", self.type_combo)
 
@@ -158,6 +162,19 @@ class ListDialog(QDialog):
         self.auto_scan_checkbox.setChecked(True if not existing else False)
         game_form.addRow("", self.auto_scan_checkbox)
 
+        self.scan_subfolders_checkbox = QCheckBox("Buscar juegos en subcarpetas de forma recursiva")
+        self.scan_subfolders_checkbox.setChecked(True)
+        self.scan_subfolders_checkbox.setToolTip("Si está desmarcado, solo se escaneará la raíz de cada carpeta configurada.")
+        game_form.addRow("Opciones de escaneo", self.scan_subfolders_checkbox)
+
+        self.exclude_folder_if_zip_checkbox = QCheckBox("Si contiene archivo .zip, listar solo el .zip (excluir resto de la carpeta)")
+        self.exclude_folder_if_zip_checkbox.setChecked(False)
+        self.exclude_folder_if_zip_checkbox.setToolTip(
+            "Si una carpeta contiene archivo(s) .zip o .7z, se lista únicamente el .zip y se excluye\n"
+            "el resto de los archivos (bin, cue, chd, etc.) y subcarpetas que contiene."
+        )
+        game_form.addRow("", self.exclude_folder_if_zip_checkbox)
+
         self.xml_edit = QLineEdit()
         self.xml_edit.setPlaceholderText("Opcional: archivo .xml/.dat con nombres completos y datos de las ROMs...")
         browse_xml_btn = QPushButton("Examinar…")
@@ -241,6 +258,76 @@ class ListDialog(QDialog):
 
         scroll_layout.addWidget(self.menu_settings_group)
 
+        # 3. Grupo para Lista Filtrada (Reglas dinámicas, lista origen, preview en vivo)
+        self.filtered_settings_group = QGroupBox("Configuración de Lista Filtrada")
+        filt_vbox = QVBoxLayout(self.filtered_settings_group)
+        filt_vbox.setSpacing(10)
+
+        filt_hint = QLabel(
+            "Una <b>Lista Filtrada</b> crea una lista dinámica a partir de otra lista de juegos existente, "
+            "evaluando uno o varios filtros según sus campos (sourcefile, género, fabricante, año, título, etc.)."
+        )
+        filt_hint.setStyleSheet("color: #aab1c0; font-size: 8.5pt;")
+        filt_hint.setWordWrap(True)
+        filt_vbox.addWidget(filt_hint)
+
+        filt_form = QFormLayout()
+        filt_form.setSpacing(8)
+
+        self.filter_source_combo = QComboBox()
+        excluded_id = self.existing.get("id") if self.existing else None
+        for l_item in self.all_lists:
+            if l_item["id"] == excluded_id:
+                continue
+            if l_item.get("list_type") == "menu":
+                continue
+            self.filter_source_combo.addItem(f"🎮 {l_item['name']}", l_item["id"])
+        self.filter_source_combo.currentIndexChanged.connect(self._on_filter_source_changed)
+        filt_form.addRow("Lista de origen *", self.filter_source_combo)
+
+        self.filter_match_mode_combo = QComboBox()
+        self.filter_match_mode_combo.addItem("Cumplir todos los filtros (AND)", "all")
+        self.filter_match_mode_combo.addItem("Cumplir cualquiera de los filtros (OR)", "any")
+        self.filter_match_mode_combo.currentIndexChanged.connect(self._update_filter_preview)
+        filt_form.addRow("Criterio de evaluación", self.filter_match_mode_combo)
+
+        self.filter_emulator_combo = QComboBox()
+        self.filter_emulator_combo.addItem("⚡ Heredar emulador de la lista origen", "INHERIT")
+        for e in emulators:
+            self.filter_emulator_combo.addItem(e["name"], e["id"])
+        filt_form.addRow("Emulador", self.filter_emulator_combo)
+
+        filt_vbox.addLayout(filt_form)
+
+        # Encabezado de reglas de filtrado
+        rules_header_layout = QHBoxLayout()
+        rules_header_label = QLabel("<b>Reglas de Filtrado:</b>")
+        self.add_filter_btn = QPushButton("＋ Agregar filtro")
+        self.add_filter_btn.clicked.connect(lambda: self._add_filter_rule_row())
+        rules_header_layout.addWidget(rules_header_label)
+        rules_header_layout.addStretch()
+        rules_header_layout.addWidget(self.add_filter_btn)
+        filt_vbox.addLayout(rules_header_layout)
+
+        self.filter_rules_container = QWidget()
+        self.filter_rules_layout = QVBoxLayout(self.filter_rules_container)
+        self.filter_rules_layout.setContentsMargins(0, 0, 0, 0)
+        self.filter_rules_layout.setSpacing(6)
+        filt_vbox.addWidget(self.filter_rules_container)
+
+        # Barra de vista previa en vivo
+        preview_box = QHBoxLayout()
+        self.filter_preview_label = QLabel("📊 Vista previa: Calculando...")
+        self.filter_preview_label.setStyleSheet("color: #7dd3fc; font-weight: 500; font-size: 8.5pt;")
+        preview_btn = QPushButton("🔄 Actualizar vista previa")
+        preview_btn.setToolTip("Re-calcular juegos coincidentes con los filtros actuales")
+        preview_btn.clicked.connect(self._update_filter_preview)
+        preview_box.addWidget(self.filter_preview_label, 1)
+        preview_box.addWidget(preview_btn)
+        filt_vbox.addLayout(preview_box)
+
+        scroll_layout.addWidget(self.filtered_settings_group)
+
         # 4. Sección de Medios y Arte (especificada dinámicamente según el diseño visual)
         media_group = QGroupBox("Carpetas de Medios y Arte (Opcional)")
         self.media_group = media_group
@@ -250,6 +337,9 @@ class ListDialog(QDialog):
         # Carpeta raíz de Medios
         self.media_root_edit = QLineEdit()
         self.media_root_edit.setPlaceholderText("Carpeta principal 'media' (ej: C:/Juegos/SNES/media)...")
+        self.media_root_edit.editingFinished.connect(
+            lambda: self.media_root_edit.setText(self._normalize_path(self.media_root_edit.text()))
+        )
         browse_media_root_btn = QPushButton("Examinar…")
         browse_media_root_btn.clicked.connect(self.pick_media_root)
 
@@ -260,15 +350,6 @@ class ListDialog(QDialog):
         media_root_widget = QWidget()
         media_root_widget.setLayout(media_root_row)
         media_layout.addRow("Carpeta Media (Raíz):", media_root_widget)
-
-        self.auto_det_row_widget = QWidget()
-        auto_det_row = QHBoxLayout(self.auto_det_row_widget)
-        auto_det_row.setContentsMargins(0, 0, 0, 0)
-        auto_det_btn = QPushButton("🔍 Auto-detectar subcarpetas según el diseño visual")
-        auto_det_btn.clicked.connect(lambda: self.auto_detect_media(silent=False))
-        auto_det_row.addWidget(auto_det_btn)
-        auto_det_row.addStretch()
-        media_layout.addRow("", self.auto_det_row_widget)
 
         # Contenedor wrapper para alojar el formulario dinámico de medios
         self.dynamic_media_wrapper = QWidget()
@@ -306,16 +387,20 @@ class ListDialog(QDialog):
 
         # Cargar valores si es edición
         if existing:
-            self.name_edit.setText(existing["name"])
-            self.platform_edit.setText(existing["platform"] or "")
-            self.extensions_edit.setText(existing["allowed_extensions"] or "")
-            self._set_rom_folders(existing["roms_path"] or "" if "roms_path" in existing.keys() else "")
+            self.name_edit.setText(existing.get("name") or "")
+            self.platform_edit.setText(existing.get("platform") or "")
+            self.extensions_edit.setText(existing.get("allowed_extensions") or "")
+            self._set_rom_folders(existing.get("roms_path") or "")
+            scan_sub = str(existing.get("scan_subfolders", "true")).strip().lower() in ("true", "1")
+            self.scan_subfolders_checkbox.setChecked(scan_sub)
+            excl_zip = str(existing.get("exclude_folder_if_zip", "false")).strip().lower() in ("true", "1")
+            self.exclude_folder_if_zip_checkbox.setChecked(excl_zip)
             if "xml_path" in existing.keys() and existing["xml_path"]:
                 self.xml_edit.setText(existing["xml_path"])
-            idx = self.emulator_combo.findData(existing["default_emulator_id"])
+            idx = self.emulator_combo.findData(existing.get("default_emulator_id"))
             if idx >= 0:
                 self.emulator_combo.setCurrentIndex(idx)
-            self.layout_combo.setCurrentText(existing["layout"] or "Wheel")
+            self.layout_combo.setCurrentText(existing.get("layout") or "Wheel")
 
             list_type = existing["list_type"] if "list_type" in existing.keys() else "games"
             idx_t = self.type_combo.findData(list_type)
@@ -323,25 +408,52 @@ class ListDialog(QDialog):
                 self.type_combo.setCurrentIndex(idx_t)
 
             if "media_path" in existing.keys() and existing["media_path"]:
-                self.media_root_edit.setText(existing["media_path"])
-            if "boxart_path" in existing.keys() and existing["boxart_path"]:
-                self._media_values["boxart"] = existing["boxart_path"]
-                self._media_values["flyer"] = existing["boxart_path"]
-            if "wheel_path" in existing.keys() and existing["wheel_path"]:
-                self._media_values["wheel"] = existing["wheel_path"]
-            if "video_path" in existing.keys() and existing["video_path"]:
-                self._media_values["video"] = existing["video_path"]
-            if "cartart_path" in existing.keys() and existing["cartart_path"]:
-                self._media_values["cartart"] = existing["cartart_path"]
-            if "cabinet_path" in existing.keys() and existing["cabinet_path"]:
-                self._media_values["cabinet"] = existing["cabinet_path"]
-            if "marquee_path" in existing.keys() and existing["marquee_path"]:
-                self._media_values["marquee"] = existing["marquee_path"]
-            if "bezel_path" in existing.keys() and existing["bezel_path"]:
-                self._media_values["bezel"] = existing["bezel_path"]
-                self._media_values["bezels"] = existing["bezel_path"]
+                self.media_root_edit.setText(self._normalize_path(existing["media_path"]))
+            for k in ("boxart", "flyer", "wheel", "video", "cartart", "cabinet", "marquee", "bezel"):
+                field_name = f"{k}_path"
+                if field_name in existing.keys() and existing[field_name]:
+                    self._media_values[k] = self._normalize_path(existing[field_name])
+            if "flyer" not in self._media_values and existing.get("boxart_path"):
+                self._media_values["flyer"] = self._normalize_path(existing["boxart_path"])
+
+            if list_type == "filtered":
+                src_id = existing.get("source_list_id")
+                idx_s = self.filter_source_combo.findData(src_id)
+                if idx_s >= 0:
+                    self.filter_source_combo.setCurrentIndex(idx_s)
+
+                mode = existing.get("filter_match_mode", "all")
+                idx_m = self.filter_match_mode_combo.findData(mode)
+                if idx_m >= 0:
+                    self.filter_match_mode_combo.setCurrentIndex(idx_m)
+
+                emu_id = existing.get("default_emulator_id")
+                idx_e = self.filter_emulator_combo.findData(emu_id)
+                if idx_e >= 0:
+                    self.filter_emulator_combo.setCurrentIndex(idx_e)
+                else:
+                    self.filter_emulator_combo.setCurrentIndex(0)
+
+                raw_rules = existing.get("filter_rules", "[]")
+                try:
+                    rules_list = json.loads(raw_rules) if isinstance(raw_rules, str) else raw_rules
+                except Exception:
+                    rules_list = []
+                for r_data in list(self.filter_rule_rows):
+                    self._remove_filter_rule_row(r_data)
+                if isinstance(rules_list, list) and rules_list:
+                    for r in rules_list:
+                        if isinstance(r, dict):
+                            self._add_filter_rule_row(
+                                field=r.get("field", "sourcefile"),
+                                op=r.get("operator", "contains"),
+                                val=r.get("value", "")
+                            )
+                else:
+                    self._add_filter_rule_row()
         else:
             self.type_combo.setCurrentIndex(0)
+            self._add_filter_rule_row()
 
         # Conectar cambio de layout para reconstruir dinámicamente las carpetas de medios esperadas
         self.layout_combo.currentTextChanged.connect(self._rebuild_dynamic_media_ui)
@@ -351,7 +463,7 @@ class ListDialog(QDialog):
 
     def _populate_sublists(self):
         self.sublists_list.clear()
-        excluded_id = self.existing["id"] if self.existing else None
+        excluded_id = self.existing.get("id") if self.existing else None
 
         initial_ids = [m["id"] for m in self.initial_menu_items]
         # Mapa de todas las listas disponibles
@@ -398,15 +510,144 @@ class ListDialog(QDialog):
             self.sublists_list.item(i).setCheckState(state)
 
     def _on_type_changed(self):
-        is_menu = (self.type_combo.currentData() == "menu")
-        self.game_settings_group.setVisible(not is_menu)
+        curr_type = self.type_combo.currentData()
+        is_menu = (curr_type == "menu")
+        is_filtered = (curr_type == "filtered")
+        is_games = (curr_type == "games")
+
+        self.game_settings_group.setVisible(is_games)
         self.menu_settings_group.setVisible(is_menu)
-        self.auto_det_row_widget.setVisible(True)
+        self.filtered_settings_group.setVisible(is_filtered)
+
         if is_menu:
             if not self.platform_edit.text().strip():
                 self.platform_edit.setText("Menú Principal")
             if not self.name_edit.text().strip():
                 self.name_edit.setText("Sistemas")
+        elif is_filtered:
+            if not self.filter_rule_rows:
+                self._add_filter_rule_row()
+            self._on_filter_source_changed()
+
+    def _add_filter_rule_row(self, field="sourcefile", op="contains", val=""):
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+
+        field_combo = QComboBox()
+        for f_key, f_label in FILTERABLE_FIELDS:
+            field_combo.addItem(f_label, f_key)
+        idx = field_combo.findData(field)
+        if idx >= 0:
+            field_combo.setCurrentIndex(idx)
+
+        op_combo = QComboBox()
+        for o_key, o_label in FILTER_OPERATORS:
+            op_combo.addItem(o_label, o_key)
+        idx_o = op_combo.findData(op)
+        if idx_o >= 0:
+            op_combo.setCurrentIndex(idx_o)
+
+        val_edit = QLineEdit(str(val or ""))
+        val_edit.setPlaceholderText("Valor a buscar...")
+
+        def _on_op_changed():
+            curr_op = op_combo.currentData()
+            if curr_op in ("is_empty", "is_not_empty"):
+                val_edit.setEnabled(False)
+                val_edit.setPlaceholderText("(Sin valor requerido)")
+            else:
+                val_edit.setEnabled(True)
+                val_edit.setPlaceholderText("Valor a buscar...")
+            self._update_filter_preview()
+
+        op_combo.currentIndexChanged.connect(_on_op_changed)
+        field_combo.currentIndexChanged.connect(self._update_filter_preview)
+        val_edit.textChanged.connect(self._update_filter_preview)
+        _on_op_changed()
+
+        del_btn = QPushButton("✕")
+        del_btn.setToolTip("Quitar esta regla")
+        del_btn.setFixedWidth(28)
+        del_btn.setStyleSheet(
+            "QPushButton { color: #f87171; font-weight: bold; border-radius: 4px; padding: 2px; }"
+            "QPushButton:hover { background-color: #ef4444; color: white; }"
+        )
+
+        row_data = {
+            "widget": row_widget,
+            "field_combo": field_combo,
+            "op_combo": op_combo,
+            "val_edit": val_edit,
+        }
+        del_btn.clicked.connect(lambda: self._remove_filter_rule_row(row_data))
+
+        row_layout.addWidget(field_combo, 3)
+        row_layout.addWidget(op_combo, 2)
+        row_layout.addWidget(val_edit, 4)
+        row_layout.addWidget(del_btn)
+
+        self.filter_rule_rows.append(row_data)
+        self.filter_rules_layout.addWidget(row_widget)
+        self._update_filter_preview()
+
+    def _remove_filter_rule_row(self, row_data):
+        if row_data in self.filter_rule_rows:
+            self.filter_rule_rows.remove(row_data)
+            row_data["widget"].setParent(None)
+            row_data["widget"].deleteLater()
+            self._update_filter_preview()
+
+    def _get_filter_rules_from_ui(self) -> list[dict]:
+        rules = []
+        for r in self.filter_rule_rows:
+            rules.append({
+                "field": r["field_combo"].currentData(),
+                "operator": r["op_combo"].currentData(),
+                "value": r["val_edit"].text().strip(),
+            })
+        return rules
+
+    def _normalize_path(self, path_str: str | None) -> str:
+        if not path_str:
+            return ""
+        return str(path_str).strip().replace("\\", "/")
+
+    def _on_filter_source_changed(self):
+        source_id = self.filter_source_combo.currentData()
+        if source_id and self.db:
+            src_list = self.db.get_list(source_id)
+            if src_list:
+                if not self.platform_edit.text().strip():
+                    self.platform_edit.setText(src_list.get("platform", ""))
+                if not self.media_root_edit.text().strip() and src_list.get("media_path"):
+                    self.media_root_edit.setText(self._normalize_path(src_list.get("media_path", "")))
+                for k in ("boxart", "flyer", "wheel", "video", "cartart", "cabinet", "marquee", "bezel"):
+                    src_k = f"{k}_path"
+                    if src_k in src_list and src_list[src_k] and k not in self._media_values:
+                        val = self._normalize_path(src_list[src_k])
+                        self._media_values[k] = val
+                        if k in self.media_edits:
+                            self.media_edits[k].setText(val)
+        self._update_filter_preview()
+
+    def _update_filter_preview(self):
+        if not hasattr(self, "filter_preview_label") or not hasattr(self, "filter_source_combo"):
+            return
+        source_id = self.filter_source_combo.currentData()
+        if not source_id or not self.db:
+            self.filter_preview_label.setText("📊 Vista previa: Seleccioná una lista origen.")
+            return
+
+        source_games = self.db.get_games(source_id, enriched=False)
+        total = len(source_games)
+        rules = self._get_filter_rules_from_ui()
+        mode = self.filter_match_mode_combo.currentData() or "all"
+        matching_count = sum(1 for g in source_games if game_matches_filter(g, rules, mode))
+        self.filter_preview_label.setText(
+            f"📊 Vista previa: <b>{matching_count}</b> de <b>{total}</b> juegos coinciden con los filtros actuales."
+        )
 
     def _rebuild_dynamic_media_ui(self):
         """
@@ -416,9 +657,7 @@ class ListDialog(QDialog):
         """
         # 1. Guardar cualquier cambio actual que haya introducido el usuario
         for key, edit in self.media_edits.items():
-            txt = edit.text().strip()
-            if txt:
-                self._media_values[key] = txt
+            self._media_values[key] = self._normalize_path(edit.text())
 
         # 2. Reemplazar contenedor dinámico limpiamente
         if hasattr(self, "dynamic_media_container") and self.dynamic_media_container is not None:
@@ -454,11 +693,18 @@ class ListDialog(QDialog):
 
             edit = QLineEdit()
             edit.setPlaceholderText(f"Carpeta de {label} (ej: media/{folder_name})...")
-            if key in self._media_values:
-                edit.setText(self._media_values[key])
+            
+            init_val = self._media_values.get(key, "")
+            if not init_val and key == "flyer" and "boxart" in self._media_values:
+                init_val = self._media_values.get("boxart", "")
+            if init_val:
+                edit.setText(init_val)
+
+            edit.textChanged.connect(lambda txt, k=key: self._media_values.__setitem__(k, self._normalize_path(txt)))
+            edit.editingFinished.connect(lambda e=edit: e.setText(self._normalize_path(e.text())))
 
             browse_btn = QPushButton("Examinar…")
-            browse_btn.clicked.connect(lambda checked=False, e=edit, l=label: self._pick_media_folder(e, f"Seleccionar carpeta de {l}"))
+            browse_btn.clicked.connect(lambda checked=False, e=edit, l=label, k=key: self._pick_media_folder(e, f"Seleccionar carpeta de {l}", k))
 
             row_layout = QHBoxLayout()
             row_layout.setContentsMargins(0, 0, 0, 0)
@@ -473,7 +719,7 @@ class ListDialog(QDialog):
 
     @property
     def boxart_edit(self):
-        return self.media_edits.get("boxart")
+        return self.media_edits.get("boxart") or self.media_edits.get("flyer")
 
     @property
     def wheel_edit(self):
@@ -540,14 +786,17 @@ class ListDialog(QDialog):
         """Limpia todas las carpetas de ROMs configuradas."""
         self._set_rom_folders([])
 
-    def _pick_media_folder(self, target_edit, dialog_title):
+    def _pick_media_folder(self, target_edit, dialog_title, key=None):
         current = target_edit.text().strip() or self.media_root_edit.text().strip() or self._get_primary_rom_folder()
         folder = QFileDialog.getExistingDirectory(self, dialog_title, current or "")
         if folder:
-            target_edit.setText(folder)
+            norm_folder = self._normalize_path(folder)
+            target_edit.setText(norm_folder)
+            if key:
+                self._media_values[key] = norm_folder
             for k, ed in self.media_edits.items():
                 if ed == target_edit:
-                    self._media_values[k] = folder
+                    self._media_values[k] = norm_folder
 
     def pick_media_root(self):
         current = self.media_root_edit.text().strip() or self._get_primary_rom_folder()
@@ -557,40 +806,7 @@ class ListDialog(QDialog):
             current or ""
         )
         if folder:
-            self.media_root_edit.setText(folder)
-            self.auto_detect_media(silent=False)
-
-    def auto_detect_media(self, silent=False):
-        base_folder = self._get_primary_rom_folder()
-        media_root = self.media_root_edit.text().strip()
-        if not base_folder and not media_root:
-            if not silent:
-                QMessageBox.information(
-                    self,
-                    "Carpeta requerida",
-                    "Seleccioná primero una carpeta de juegos o la de Medios para auto-detectar."
-                )
-            return
-
-        spec = get_layout_media_spec(self.layout_combo.currentText())
-        det = detect_media_folders(base_folder, media_root=media_root, media_spec=spec)
-        found_any = False
-
-        if det.get("media_path") and not self.media_root_edit.text().strip():
-            self.media_root_edit.setText(det["media_path"])
-
-        for key, edit in self.media_edits.items():
-            field = f"{key}_path"
-            if field in det and det[field]:
-                edit.setText(det[field])
-                self._media_values[key] = det[field]
-                found_any = True
-
-        if not silent:
-            if found_any:
-                QMessageBox.information(self, "Medios detectados", "¡Carpetas de medios detectadas y vinculadas exitosamente según el diseño visual!")
-            else:
-                QMessageBox.information(self, "Búsqueda finalizada", "No se encontraron subcarpetas para los medios requeridos en el directorio.")
+            self.media_root_edit.setText(self._normalize_path(folder))
 
     def pick_folder(self):
         current_folders = self.get_rom_folders()
@@ -603,7 +819,7 @@ class ListDialog(QDialog):
             initial_dir or ""
         )
         if folder:
-            current_folders.append(folder)
+            current_folders.append(self._normalize_path(folder))
             self._set_rom_folders(current_folders)
             self.auto_scan_checkbox.setChecked(True)
 
@@ -617,7 +833,7 @@ class ListDialog(QDialog):
             "Archivos XML / DAT (*.xml *.dat);;Todos los archivos (*.*)"
         )
         if path:
-            self.xml_edit.setText(path)
+            self.xml_edit.setText(self._normalize_path(path))
 
     def _on_preset_selected(self, index):
         title = self.preset_combo.currentText()
@@ -635,6 +851,7 @@ class ListDialog(QDialog):
             return
 
         is_menu = (self.type_combo.currentData() == "menu")
+        is_filtered = (self.type_combo.currentData() == "filtered")
         if is_menu:
             checked_count = sum(1 for i in range(self.sublists_list.count()) if self.sublists_list.item(i).checkState() == Qt.Checked)
             if checked_count == 0:
@@ -647,6 +864,28 @@ class ListDialog(QDialog):
                 )
                 if answer != QMessageBox.Yes:
                     return
+            self.accept()
+            return
+
+        if is_filtered:
+            source_id = self.filter_source_combo.currentData()
+            if not source_id:
+                QMessageBox.warning(self, "Lista origen requerida", "Por favor seleccioná la lista de origen de la cual se filtrarán los juegos.")
+                self.filter_source_combo.setFocus()
+                return
+
+            rules = self._get_filter_rules_from_ui()
+            valid_rules = [
+                r for r in rules
+                if r["operator"] in ("is_empty", "is_not_empty") or r["value"].strip()
+            ]
+            if not valid_rules:
+                QMessageBox.warning(
+                    self,
+                    "Filtro requerido",
+                    "Por favor configurá al menos una regla de filtrado con un valor (ej: sourcefile contiene 'cps1')."
+                )
+                return
             self.accept()
             return
 
@@ -724,23 +963,50 @@ class ListDialog(QDialog):
 
         # Sincronizar últimos valores de los edits
         for k, ed in self.media_edits.items():
-            self._media_values[k] = ed.text().strip()
+            self._media_values[k] = self._normalize_path(ed.text())
 
-        media_path = self.media_root_edit.text().strip()
-        boxart_path = self._media_values.get("boxart") or self._media_values.get("flyer") or ""
+        media_path = self._normalize_path(self.media_root_edit.text())
+        boxart_path = self._media_values.get("boxart", "")
+        flyer_path = self._media_values.get("flyer", "")
         wheel_path = self._media_values.get("wheel", "")
         video_path = self._media_values.get("video", "")
         cartart_path = self._media_values.get("cartart", "")
         cabinet_path = self._media_values.get("cabinet", "")
         marquee_path = self._media_values.get("marquee", "")
-        bezel_path = self._media_values.get("bezel") or self._media_values.get("bezels") or ""
-        xml_path = self.xml_edit.text().strip() if (list_type == "games" and hasattr(self, "xml_edit")) else ""
+        bezel_path = self._media_values.get("bezel", "")
+        xml_path = self._normalize_path(self.xml_edit.text().strip()) if (list_type == "games" and hasattr(self, "xml_edit")) else ""
         roms_path_val = format_rom_folders(self.get_rom_folders()) if list_type == "games" else ""
+
+        # Determinar emulador efectivo
+        if list_type == "games":
+            emu_val = self.emulator_combo.currentData()
+        elif list_type == "filtered":
+            raw_f_emu = self.filter_emulator_combo.currentData()
+            if raw_f_emu == "INHERIT":
+                src_id = self.filter_source_combo.currentData()
+                src_row = self.db.get_list(src_id) if (self.db and src_id) else None
+                emu_val = src_row.get("default_emulator_id") if src_row else None
+            else:
+                emu_val = raw_f_emu
+        else:
+            emu_val = None
+
+        if list_type == "filtered":
+            raw_rules = self._get_filter_rules_from_ui()
+            filter_rules = [
+                r for r in raw_rules
+                if r.get("operator") in ("is_empty", "is_not_empty") or r.get("value")
+            ]
+        else:
+            filter_rules = []
+        filter_rules_json = json.dumps(filter_rules, ensure_ascii=False)
+        source_list_id = self.filter_source_combo.currentData() if list_type == "filtered" else None
+        filter_match_mode = self.filter_match_mode_combo.currentData() if list_type == "filtered" else "all"
 
         return (
             self.name_edit.text().strip(),
             self.platform_edit.text().strip(),
-            self.emulator_combo.currentData() if list_type == "games" else None,
+            emu_val,
             self.layout_combo.currentText(),
             self.normalized_exts if list_type == "games" else "",
             roms_path_val,
@@ -756,6 +1022,12 @@ class ListDialog(QDialog):
             marquee_path,
             xml_path,
             bezel_path,
+            self.scan_subfolders_checkbox.isChecked() if list_type == "games" else True,
+            self.exclude_folder_if_zip_checkbox.isChecked() if list_type == "games" else False,
+            source_list_id,
+            filter_rules_json,
+            filter_match_mode,
+            flyer_path,
         )
 
 
@@ -1146,6 +1418,19 @@ class GameEditDialog(QDialog):
         cr_widget.setLayout(row_cr)
         meta_form.addRow("Clon de:", cr_widget)
 
+        sourcefile_val = game.get("sourcefile") or ""
+        if not sourcefile_val:
+            meta_json = game.get("xml_metadata") or "{}"
+            try:
+                m_dict = json.loads(meta_json) if isinstance(meta_json, str) else meta_json
+                if isinstance(m_dict, dict):
+                    sourcefile_val = m_dict.get("sourcefile") or m_dict.get("source_file") or ""
+            except Exception:
+                pass
+        self.sourcefile_edit = QLineEdit(sourcefile_val)
+        self.sourcefile_edit.setPlaceholderText("Archivo fuente driver MAME (ej: capcom/cps1.cpp, neogeo.cpp)")
+        meta_form.addRow("Sourcefile:", self.sourcefile_edit)
+
         # Carátula / portada del juego
         self.cover_edit = QLineEdit(game.get("cover_path") or "")
         self.cover_edit.setPlaceholderText("Sin carátula asignada (se genera automáticamente)")
@@ -1234,6 +1519,7 @@ class GameEditDialog(QDialog):
         cloneof = self.cloneof_edit.text().strip()
         rating = self.rating_edit.text().strip()
         crc = self.crc_edit.text().strip()
+        sourcefile = self.sourcefile_edit.text().strip() if hasattr(self, "sourcefile_edit") else ""
 
         emu_override = self.override_combo.currentData()
         args = self.args_edit.text().strip()
@@ -1250,6 +1536,8 @@ class GameEditDialog(QDialog):
 
         meta_dict["title"] = title
         meta_dict["rom_name"] = rom_name
+        if sourcefile:
+            meta_dict["sourcefile"] = sourcefile
         for k, v in (
             ("year", year),
             ("manufacturer", manufacturer),
@@ -1258,6 +1546,7 @@ class GameEditDialog(QDialog):
             ("cloneof", cloneof),
             ("rating", rating),
             ("crc", crc),
+            ("sourcefile", sourcefile),
         ):
             if v:
                 meta_dict[k] = v
@@ -1298,6 +1587,7 @@ class GameEditDialog(QDialog):
                 cloneof=cloneof,
                 rating=rating,
                 crc=crc,
+                sourcefile=sourcefile,
                 xml_metadata=xml_metadata,
                 emulator_override_id=emu_override,
                 launch_arguments=args,

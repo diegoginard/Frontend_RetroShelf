@@ -15,7 +15,9 @@ from retroshelf.services.media import resolve_game_media, find_media_file, IMAGE
 from retroshelf.ui.cover_utils import load_cover
 from retroshelf.services.controls import (
     matches_action, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_SELECT, ACTION_MUTE, ACTION_NAV_BACK,
-    ACTION_NAV_LETTER, ACTION_NAV_STEP5, ACTION_PAGE_UP, ACTION_PAGE_DOWN
+    ACTION_NAV_LETTER, ACTION_NAV_STEP5, ACTION_PAGE_UP, ACTION_PAGE_DOWN,
+    ACTION_NAV_LETTER_FWD, ACTION_NAV_LETTER_BACK,
+    ACTION_NAV_STEP5_FWD, ACTION_NAV_STEP5_BACK
 )
 
 
@@ -372,8 +374,9 @@ class WheelLayout(BaseLayout):
             if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferingMedia, QMediaPlayer.BufferedMedia):
                 if self._want_video_playing and self.isVisible():
                     if self.audio_output:
-                        self.audio_output.setMuted(getattr(self, "_media_muted", False))
-                        self.audio_output.setVolume(0.35)
+                        is_m = getattr(self, "_media_muted", False)
+                        self.audio_output.setMuted(is_m)
+                        self.audio_output.setVolume(0.0 if is_m else 0.35)
                     if self.player.playbackState() != QMediaPlayer.PlayingState:
                         self.player.play()
                 else:
@@ -665,8 +668,9 @@ class WheelLayout(BaseLayout):
             self._video_stack.setCurrentIndex(1)
             try:
                 if self.audio_output:
-                    self.audio_output.setMuted(getattr(self, "_media_muted", False))
-                    self.audio_output.setVolume(0.35)
+                    is_m = getattr(self, "_media_muted", False)
+                    self.audio_output.setMuted(is_m)
+                    self.audio_output.setVolume(0.0 if is_m else 0.35)
                 src_url = QUrl.fromLocalFile(video_file)
                 if self.player.source() == src_url:
                     self.player.setPosition(0)
@@ -720,19 +724,19 @@ class WheelLayout(BaseLayout):
             self.wheel_list.setCurrentRow(row)
             event.accept()
             return
-        elif matches_action(event, ACTION_NAV_LETTER, getattr(self, "db", None)):
+        elif matches_action(event, ACTION_NAV_LETTER_BACK, getattr(self, "db", None)):
+            self.jump_to_prev_letter()
+            event.accept()
+            return
+        elif matches_action(event, ACTION_NAV_LETTER_FWD, getattr(self, "db", None)) or matches_action(event, ACTION_NAV_LETTER, getattr(self, "db", None)):
             self.jump_to_next_letter()
             event.accept()
             return
-        elif matches_action(event, ACTION_NAV_STEP5, getattr(self, "db", None)):
-            self.navigate_steps(5)
-            event.accept()
-            return
-        elif matches_action(event, ACTION_PAGE_UP, getattr(self, "db", None)):
+        elif matches_action(event, ACTION_NAV_STEP5_BACK, getattr(self, "db", None)) or matches_action(event, ACTION_PAGE_UP, getattr(self, "db", None)):
             self.navigate_steps(-5)
             event.accept()
             return
-        elif matches_action(event, ACTION_PAGE_DOWN, getattr(self, "db", None)):
+        elif matches_action(event, ACTION_NAV_STEP5_FWD, getattr(self, "db", None)) or matches_action(event, ACTION_NAV_STEP5, getattr(self, "db", None)) or matches_action(event, ACTION_PAGE_DOWN, getattr(self, "db", None)):
             self.navigate_steps(5)
             event.accept()
             return
@@ -752,6 +756,15 @@ class WheelLayout(BaseLayout):
         if self.audio_output:
             try:
                 self.audio_output.setMuted(muted)
+                self.audio_output.setVolume(0.0 if muted else 0.35)
+            except Exception:
+                pass
+        if hasattr(self, "mute_btn") and self.mute_btn:
+            try:
+                self.mute_btn.blockSignals(True)
+                self.mute_btn.setChecked(muted)
+                self.mute_btn.setText("🔇 Silenciado" if muted else "🔊 Silenciar video")
+                self.mute_btn.blockSignals(False)
             except Exception:
                 pass
 

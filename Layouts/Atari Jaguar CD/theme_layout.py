@@ -339,6 +339,8 @@ class ThemeLayout(BaseLayout):
                             self._font_main = families[0]
 
     def _play_wheel_sound(self):
+        if getattr(self, "_media_muted", False):
+            return
         try:
             if self._sound_effect.source().isValid():
                 self._sound_effect.play()
@@ -351,6 +353,8 @@ class ThemeLayout(BaseLayout):
             pass
 
     def _play_select_sound(self):
+        if getattr(self, "_media_muted", False):
+            return
         try:
             if self._select_sound_effect.source().isValid():
                 self._select_sound_effect.play()
@@ -637,6 +641,15 @@ class ThemeLayout(BaseLayout):
 
     def set_media_muted(self, muted: bool):
         self._media_muted = muted
+        for eff_name in ("_sound_effect", "_select_sound_effect"):
+            if hasattr(self, eff_name):
+                eff = getattr(self, eff_name)
+                if eff:
+                    try:
+                        eff.setMuted(muted)
+                        eff.setVolume(0.0 if muted else 0.5)
+                    except Exception:
+                        pass
         if self.audio_output:
             self.audio_output.setMuted(muted)
             self.audio_output.setVolume(0.0 if muted else 0.8)

@@ -1,6 +1,6 @@
-# Configuración de Emulador: Mame
+# Configuración de Emulador: Mame Unlock
 id = 12
-name = Mame
+name = Mame Unlock
 executable = C:/Attract/Emu/Mame_oficial/mame.exe
 arguments = "{rom}" -skip_gameinfo
 platform = VArios sistemas arcade

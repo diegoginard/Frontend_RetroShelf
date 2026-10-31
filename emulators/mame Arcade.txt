@@ -1,0 +1,7 @@
+# Configuración de Emulador: Mame Arcade
+id = 14
+name = Mame Arcade
+executable = C:/Attract/Emu/Mame_Arc/arcade64.exe
+arguments = "{rom}" -skip_gameinfo
+platform = 
+created_at = 2026-10-30 16:40:04

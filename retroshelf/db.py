@@ -92,8 +92,11 @@ LIST_DEFAULTS = {
     "layout": "Wheel",
     "allowed_extensions": "",
     "roms_path": "",
+    "scan_subfolders": "true",
+    "exclude_folder_if_zip": "false",
     "media_path": "",
     "boxart_path": "",
+    "flyer_path": "",
     "wheel_path": "",
     "video_path": "",
     "cartart_path": "",
@@ -102,6 +105,9 @@ LIST_DEFAULTS = {
     "bezel_path": "",
     "xml_path": "",
     "created_at": "",
+    "source_list_id": None,
+    "filter_rules": "[]",
+    "filter_match_mode": "all",
 }
 
 EMULATOR_DEFAULTS = {
@@ -276,6 +282,16 @@ class _PlainTextStore:
                 lst = {"id": lid}
                 for k, def_v in LIST_DEFAULTS.items():
                     lst[k] = data.get(k, def_v)
+                for pk in ("media_path", "boxart_path", "flyer_path", "wheel_path", "video_path",
+                           "cartart_path", "cabinet_path", "marquee_path", "bezel_path", "xml_path"):
+                    if lst.get(pk):
+                        lst[pk] = str(lst[pk]).strip().replace("\\", "/")
+                if lst.get("roms_path"):
+                    lst["roms_path"] = ";".join(
+                        p.strip().replace("\\", "/")
+                        for p in str(lst["roms_path"]).split(";")
+                        if p.strip()
+                    )
                 if not lst["name"]:
                     lst["name"] = f_path.stem
 
@@ -291,6 +307,12 @@ class _PlainTextStore:
                                 matched_eid = eid
                                 break
                     lst["default_emulator_id"] = matched_eid
+
+                raw_src = lst.get("source_list_id")
+                if raw_src is not None and str(raw_src).strip().isdigit():
+                    lst["source_list_id"] = int(str(raw_src).strip())
+                else:
+                    lst["source_list_id"] = None
 
                 menu_str = data.get("menu_items", "")
                 if menu_str:
@@ -336,6 +358,14 @@ class _PlainTextStore:
                     notes = parts[14] if len(parts) > 14 else ""
                     xml_metadata = parts[15] if (len(parts) > 15 and parts[15]) else "{}"
                     created_at = parts[16] if len(parts) > 16 else ""
+                    sourcefile = parts[17] if len(parts) > 17 else ""
+                    if not sourcefile and xml_metadata and xml_metadata != "{}":
+                        try:
+                            _m = json.loads(xml_metadata)
+                            if isinstance(_m, dict):
+                                sourcefile = str(_m.get("sourcefile") or _m.get("source_file") or "").strip()
+                        except Exception:
+                            pass
 
                     g_dict = {
                         "id": gid,
@@ -354,6 +384,7 @@ class _PlainTextStore:
                         "launch_arguments": launch_args,
                         "cover_path": cover_path,
                         "notes": notes,
+                        "sourcefile": sourcefile,
                         "xml_metadata": xml_metadata,
                         "created_at": created_at,
                     }
@@ -497,7 +528,7 @@ class _PlainTextStore:
         lines.append("[Games]")
         lines.append(
             "# id;rom_name;title;rom_path;year;manufacturer;genre;players;cloneof;rating;crc;"
-            "emulator_override_id;launch_arguments;cover_path;notes;xml_metadata;created_at"
+            "emulator_override_id;launch_arguments;cover_path;notes;xml_metadata;created_at;sourcefile"
         )
         for g in self.games_by_list.get(lid, []):
             row_fields = [
@@ -518,6 +549,7 @@ class _PlainTextStore:
                 _escape_field(g.get("notes", "")),
                 _escape_field(g.get("xml_metadata", "{}")),
                 _escape_field(g.get("created_at", "")),
+                _escape_field(g.get("sourcefile", "")),
             ]
             lines.append(";".join(row_fields))
 
@@ -569,6 +601,12 @@ class Database:
             yield
         finally:
             self._store.end_batch()
+
+    def begin_batch(self):
+        self._store.begin_batch()
+
+    def end_batch(self):
+        self._store.end_batch()
 
     # ------------------------------------------------------------------
     # 1. CONFIGURACIÓN (config/settings.txt)
@@ -713,6 +751,16 @@ class Database:
                 lst[k] = fields[k]
             else:
                 lst[k] = def_v
+        for pk in ("media_path", "boxart_path", "flyer_path", "wheel_path", "video_path",
+                   "cartart_path", "cabinet_path", "marquee_path", "bezel_path", "xml_path"):
+            if lst.get(pk):
+                lst[pk] = str(lst[pk]).strip().replace("\\", "/")
+        if lst.get("roms_path"):
+            lst["roms_path"] = ";".join(
+                p.strip().replace("\\", "/")
+                for p in str(lst["roms_path"]).split(";")
+                if p.strip()
+            )
         lst["name"] = clean_name
         if not lst["created_at"]:
             lst["created_at"] = now_str
@@ -720,6 +768,11 @@ class Database:
             lst["default_emulator_id"] = int(lst["default_emulator_id"])
         else:
             lst["default_emulator_id"] = None
+
+        if lst.get("source_list_id") is not None and str(lst["source_list_id"]).strip() != "":
+            lst["source_list_id"] = int(lst["source_list_id"])
+        else:
+            lst["source_list_id"] = None
 
         self._store.game_lists[lid] = lst
         self._store.games_by_list[lid] = []
@@ -738,11 +791,24 @@ class Database:
                 if other_id != lid and ex["name"].lower() == new_name.lower():
                     raise ValueError(f"Ya existe una lista con el nombre '{new_name}'.")
             updates["name"] = new_name
+        for pk in ("media_path", "boxart_path", "flyer_path", "wheel_path", "video_path",
+                   "cartart_path", "cabinet_path", "marquee_path", "bezel_path", "xml_path"):
+            if pk in updates and updates[pk] is not None:
+                updates[pk] = str(updates[pk]).strip().replace("\\", "/")
+        if "roms_path" in updates and updates["roms_path"] is not None:
+            updates["roms_path"] = ";".join(
+                p.strip().replace("\\", "/")
+                for p in str(updates["roms_path"]).split(";")
+                if p.strip()
+            )
         lst = self._store.game_lists[lid]
         lst.update(updates)
         if "default_emulator_id" in updates:
             raw_e = lst.get("default_emulator_id")
             lst["default_emulator_id"] = int(raw_e) if (raw_e is not None and str(raw_e).strip() != "") else None
+        if "source_list_id" in updates:
+            raw_s = lst.get("source_list_id")
+            lst["source_list_id"] = int(raw_s) if (raw_s is not None and str(raw_s).strip() != "") else None
         self._store._dirty_lists.add(lid)
         self._store.flush()
         return lid
@@ -759,6 +825,10 @@ class Database:
                 if lid in items:
                     items.remove(lid)
                     self._store._dirty_lists.add(mid)
+            for other_id, other_lst in self._store.game_lists.items():
+                if other_lst.get("source_list_id") == lid:
+                    other_lst["source_list_id"] = None
+                    self._store._dirty_lists.add(other_id)
             self._store._dirty_lists.add(lid)
             self._store.flush()
         return lid
@@ -828,7 +898,8 @@ class Database:
             if term:
                 haystack = (
                     f"{g.get('title', '')} {g.get('rom_path', '')} {g.get('rom_name', '')} "
-                    f"{g.get('manufacturer', '')} {g.get('year', '')} {g.get('genre', '')}"
+                    f"{g.get('manufacturer', '')} {g.get('year', '')} {g.get('genre', '')} "
+                    f"{g.get('sourcefile', '')}"
                 ).lower()
                 if term not in haystack:
                     continue
@@ -837,6 +908,7 @@ class Database:
             d["default_emulator_id"] = def_emu_id
             d["platform"] = lst.get("platform", "")
             d["boxart_path"] = lst.get("boxart_path", "")
+            d["flyer_path"] = lst.get("flyer_path", "")
             d["wheel_path"] = lst.get("wheel_path", "")
             d["video_path"] = lst.get("video_path", "")
             d["cartart_path"] = lst.get("cartart_path", "")
@@ -893,6 +965,7 @@ class Database:
             "cloneof": str(fields.get("cloneof") or ""),
             "rating": str(fields.get("rating") or ""),
             "crc": str(fields.get("crc") or ""),
+            "sourcefile": str(fields.get("sourcefile") or ""),
             "xml_metadata": str(fields.get("xml_metadata") or "{}"),
             "created_at": str(fields.get("created_at") or now_str),
         }

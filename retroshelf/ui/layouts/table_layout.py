@@ -7,12 +7,31 @@ from PySide6.QtWidgets import (
 from retroshelf.ui.layouts.base import BaseLayout
 from retroshelf.services.controls import matches_action, ACTION_NAV_BACK
 
+class SortableTableWidgetItem(QTableWidgetItem):
+    """
+    Elemento de tabla con soporte para ordenación inteligente:
+    - Numérica por sort_key si se especifica (para año y tamaño en bytes)
+    - Alfanumérica sin distinción de mayúsculas/minúsculas para texto
+    """
+    def __init__(self, text: str = "", sort_key=None):
+        super().__init__(text)
+        self._sort_key = sort_key
+
+    def __lt__(self, other):
+        if isinstance(other, SortableTableWidgetItem):
+            if self._sort_key is not None and other._sort_key is not None:
+                return self._sort_key < other._sort_key
+        t1 = (self.text() or "").strip().lower()
+        t2 = (other.text() or "").strip().lower() if other else ""
+        return t1 < t2
+
+
 class TableLayout(BaseLayout):
     """
     Layout personalizado: Tabla Detallada con datos técnicos ordenables.
     """
     LAYOUT_NAME = "Detalles"
-    LAYOUT_DESCRIPTION = "Tabla técnica completa con columnas de tamaño, extensión y emulador"
+    LAYOUT_DESCRIPTION = "Tabla técnica completa con columnas redimensionables y ordenables"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -20,29 +39,31 @@ class TableLayout(BaseLayout):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self._size_cache: dict[str, str] = {}
+        self._size_cache: dict[str, tuple[str, int]] = {}
 
-        self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels(["Título", "ROM / Archivo", "Año", "Fabricante", "Género", "Formato", "Tamaño", "Emulador efectivo"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Interactive)
-        self.table.setColumnWidth(1, 120)
-        self.table.setColumnWidth(2, 65)
-        self.table.setColumnWidth(3, 130)
-        self.table.setColumnWidth(4, 120)
-        self.table.setColumnWidth(5, 75)
-        self.table.setColumnWidth(6, 90)
-        self.table.setColumnWidth(7, 170)
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels([
+            "Título", "ROM / Archivo", "Sourcefile", "Año", "Fabricante", "Género", "Formato", "Tamaño", "Emulador efectivo"
+        ])
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        self.table.setColumnWidth(0, 240)
+        self.table.setColumnWidth(1, 140)
+        self.table.setColumnWidth(2, 140)
+        self.table.setColumnWidth(3, 65)
+        self.table.setColumnWidth(4, 130)
+        self.table.setColumnWidth(5, 110)
+        self.table.setColumnWidth(6, 75)
+        self.table.setColumnWidth(7, 95)
+        self.table.setColumnWidth(8, 170)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.setSortingEnabled(True)
 
         self.table.itemSelectionChanged.connect(self._on_item_selected)
         self.table.doubleClicked.connect(self._on_double_clicked)
@@ -60,6 +81,7 @@ class TableLayout(BaseLayout):
     def render_games(self):
         self.table.blockSignals(True)
         self.table.setUpdatesEnabled(False)
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self.games))
 
         for i, g in enumerate(self.games):
@@ -67,35 +89,53 @@ class TableLayout(BaseLayout):
             filename = os.path.basename(rom_path)
             _, ext = os.path.splitext(rom_path)
 
-            title_item = QTableWidgetItem(g.get("title", ""))
+            title_item = SortableTableWidgetItem(g.get("title", ""))
             title_item.setData(Qt.UserRole, g.get("id"))
             self.table.setItem(i, 0, title_item)
 
-            file_item = QTableWidgetItem(filename)
+            file_item = SortableTableWidgetItem(filename)
             file_item.setToolTip(rom_path)
             self.table.setItem(i, 1, file_item)
 
-            self.table.setItem(i, 2, QTableWidgetItem(g.get("year") or "—"))
-            self.table.setItem(i, 3, QTableWidgetItem(g.get("manufacturer") or "—"))
-            self.table.setItem(i, 4, QTableWidgetItem(g.get("genre") or "—"))
-            self.table.setItem(i, 5, QTableWidgetItem(ext.lower()))
+            sourcefile = str(g.get("sourcefile") or "").strip()
+            if not sourcefile:
+                xml_meta = g.get("xml_properties") or {}
+                if isinstance(xml_meta, dict):
+                    sourcefile = str(xml_meta.get("sourcefile") or xml_meta.get("source_file") or "").strip()
+            source_item = SortableTableWidgetItem(sourcefile or "—")
+            if sourcefile:
+                source_item.setToolTip(sourcefile)
+            self.table.setItem(i, 2, source_item)
 
-            size_str = self._size_cache.get(rom_path)
-            if size_str is None:
+            year_raw = str(g.get("year") or "").strip()
+            year_val = int(year_raw) if year_raw.isdigit() else -1
+            self.table.setItem(i, 3, SortableTableWidgetItem(year_raw or "—", sort_key=year_val))
+
+            self.table.setItem(i, 4, SortableTableWidgetItem(g.get("manufacturer") or "—"))
+            self.table.setItem(i, 5, SortableTableWidgetItem(g.get("genre") or "—"))
+            self.table.setItem(i, 6, SortableTableWidgetItem(ext.lower()))
+
+            cached = self._size_cache.get(rom_path)
+            if cached is None:
                 try:
                     st = os.stat(rom_path)
                     mb = st.st_size / (1024 * 1024)
                     size_str = f"{mb:.2f} MB"
+                    size_bytes = st.st_size
                 except OSError:
                     size_str = "—"
-                self._size_cache[rom_path] = size_str
-            self.table.setItem(i, 6, QTableWidgetItem(size_str))
+                    size_bytes = -1
+                self._size_cache[rom_path] = (size_str, size_bytes)
+            else:
+                size_str, size_bytes = cached
+            self.table.setItem(i, 7, SortableTableWidgetItem(size_str, sort_key=size_bytes))
 
             emu = g.get("effective_name", "Sin emulador")
             source = g.get("source", "")
             source_str = f" ({source})" if source else ""
-            self.table.setItem(i, 7, QTableWidgetItem(f"{emu}{source_str}"))
+            self.table.setItem(i, 8, SortableTableWidgetItem(f"{emu}{source_str}"))
 
+        self.table.setSortingEnabled(True)
         self.table.setUpdatesEnabled(True)
         self.table.blockSignals(False)
 

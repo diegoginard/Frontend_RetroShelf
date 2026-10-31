@@ -8,16 +8,23 @@ from PySide6.QtCore import Qt
 
 # Identificadores de acciones configurables
 ACTION_CLOSE_EMULATOR = "close_emulator"
+ACTION_CLOSE_FRONTEND = "close_frontend"
 ACTION_NAV_UP = "nav_up"
 ACTION_NAV_DOWN = "nav_down"
-ACTION_NAV_LETTER = "nav_letter"
-ACTION_NAV_STEP5 = "nav_step5"
-ACTION_NAV_BACK = "nav_back"
-ACTION_PAGE_UP = "page_up"
-ACTION_PAGE_DOWN = "page_down"
+ACTION_NAV_LETTER_BACK = "nav_letter_back"
+ACTION_NAV_LETTER_FWD = "nav_letter_fwd"
+ACTION_NAV_STEP5_BACK = "nav_step5_back"
+ACTION_NAV_STEP5_FWD = "nav_step5_fwd"
 ACTION_SELECT = "select_game"
+ACTION_NAV_BACK = "nav_back"
 ACTION_MUTE = "mute_video"
 ACTION_TOGGLE_FPS = "toggle_fps"
+
+# Compatibilidad con identificadores anteriores
+ACTION_NAV_LETTER = ACTION_NAV_LETTER_FWD
+ACTION_NAV_STEP5 = ACTION_NAV_STEP5_FWD
+ACTION_PAGE_UP = ACTION_NAV_STEP5_BACK
+ACTION_PAGE_DOWN = ACTION_NAV_STEP5_FWD
 
 # Metadatos de cada acción (nombre para mostrar, descripción, tecla por defecto y botón mando por defecto)
 ACTIONS_INFO = [
@@ -36,18 +43,32 @@ ACTIONS_INFO = [
         "default_pad": "D-Pad Down",
     },
     {
-        "id": ACTION_NAV_LETTER,
-        "name": "Saltar de letra en letra (Izquierda)",
-        "desc": "Salta al primer juego de la siguiente letra (ej: si está en la A pasa a la B)",
+        "id": ACTION_NAV_LETTER_BACK,
+        "name": "Saltar letra hacia atrás",
+        "desc": "Salta al primer juego de la letra anterior en orden alfabético",
         "default": "Left",
         "default_pad": "D-Pad Left",
     },
     {
-        "id": ACTION_NAV_STEP5,
-        "name": "Saltar de 5 en 5 (Derecha)",
-        "desc": "Avanza rápidamente saltando de 5 en 5 juegos en la lista",
+        "id": ACTION_NAV_LETTER_FWD,
+        "name": "Saltar letra hacia adelante",
+        "desc": "Salta al primer juego de la siguiente letra en orden alfabético",
         "default": "Right",
         "default_pad": "D-Pad Right",
+    },
+    {
+        "id": ACTION_NAV_STEP5_BACK,
+        "name": "Saltar de 5 en 5 hacia atrás",
+        "desc": "Retrocede rápidamente saltando de 5 en 5 juegos en la lista",
+        "default": "PageUp",
+        "default_pad": "LB",
+    },
+    {
+        "id": ACTION_NAV_STEP5_FWD,
+        "name": "Saltar de 5 en 5 hacia adelante",
+        "desc": "Avanza rápidamente saltando de 5 en 5 juegos en la lista",
+        "default": "PageDown",
+        "default_pad": "RB",
     },
     {
         "id": ACTION_SELECT,
@@ -64,18 +85,11 @@ ACTIONS_INFO = [
         "default_pad": "B",
     },
     {
-        "id": ACTION_PAGE_UP,
-        "name": "Retroceder de a 5 / Página anterior",
-        "desc": "Retrocede 5 juegos o una página en la lista",
-        "default": "PageUp",
-        "default_pad": "LB",
-    },
-    {
-        "id": ACTION_PAGE_DOWN,
-        "name": "Avanzar página (RePág)",
-        "desc": "Avanza una página completa en la lista",
-        "default": "PageDown",
-        "default_pad": "RB",
+        "id": ACTION_CLOSE_FRONTEND,
+        "name": "Cerrar frontend (RetroShelf)",
+        "desc": "Cierra la ventana del frontend y vuelve al sistema",
+        "default": "Escape",
+        "default_pad": "",
     },
     {
         "id": ACTION_CLOSE_EMULATOR,
@@ -190,12 +204,14 @@ NAME_TO_QT.setdefault("Enter", [Qt.Key_Return, Qt.Key_Enter])
 ACTION_ALIASES = {
     ACTION_NAV_UP: [Qt.Key_Up, Qt.Key_W, Qt.Key_K],
     ACTION_NAV_DOWN: [Qt.Key_Down, Qt.Key_S, Qt.Key_J],
-    ACTION_NAV_LETTER: [Qt.Key_Left, Qt.Key_A],
-    ACTION_NAV_STEP5: [Qt.Key_Right, Qt.Key_D],
+    ACTION_NAV_LETTER_BACK: [Qt.Key_Left, Qt.Key_A],
+    ACTION_NAV_LETTER_FWD: [Qt.Key_Right, Qt.Key_D],
+    ACTION_NAV_STEP5_BACK: [Qt.Key_PageUp],
+    ACTION_NAV_STEP5_FWD: [Qt.Key_PageDown],
     ACTION_NAV_BACK: [Qt.Key_Backspace, Qt.Key_Escape],
-    ACTION_PAGE_UP: [Qt.Key_PageUp],
-    ACTION_PAGE_DOWN: [Qt.Key_PageDown],
     ACTION_SELECT: [Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space],
+    ACTION_CLOSE_FRONTEND: [Qt.Key_Escape],
+    ACTION_CLOSE_EMULATOR: [Qt.Key_Escape],
     ACTION_TOGGLE_FPS: [Qt.Key_F10, Qt.Key_F3],
 }
 
@@ -203,12 +219,13 @@ ACTION_ALIASES = {
 GAMEPAD_ACTION_ALIASES = {
     ACTION_NAV_UP: ["D-Pad Up", "L-Stick Up", "POV Up", "Axis Y-"],
     ACTION_NAV_DOWN: ["D-Pad Down", "L-Stick Down", "POV Down", "Axis Y+"],
-    ACTION_NAV_LETTER: ["D-Pad Left", "L-Stick Left", "POV Left", "Axis X-"],
-    ACTION_NAV_STEP5: ["D-Pad Right", "L-Stick Right", "POV Right", "Axis X+"],
+    ACTION_NAV_LETTER_BACK: ["D-Pad Left", "L-Stick Left", "POV Left", "Axis X-"],
+    ACTION_NAV_LETTER_FWD: ["D-Pad Right", "L-Stick Right", "POV Right", "Axis X+"],
+    ACTION_NAV_STEP5_BACK: ["LB", "Button 5"],
+    ACTION_NAV_STEP5_FWD: ["RB", "Button 6"],
     ACTION_SELECT: ["A", "Start", "Button 1"],
     ACTION_NAV_BACK: ["B", "Back", "Button 2"],
-    ACTION_PAGE_UP: ["LB", "Button 5"],
-    ACTION_PAGE_DOWN: ["RB", "Button 6"],
+    ACTION_CLOSE_FRONTEND: ["Back+Start"],
     ACTION_CLOSE_EMULATOR: ["Back+Start"],
     ACTION_MUTE: ["Y", "Button 4"],
     ACTION_TOGGLE_FPS: ["R-Thumb", "Button 10", "R3", "RS"],
@@ -319,7 +336,35 @@ def get_binding(db, action: str) -> str:
             db = Database()
         except Exception:
             return default
-    return db.get_setting(f"control_{action}", default)
+
+    # Compatibilidad con acciones redirigidas o alias anteriores
+    val = db.get_setting(f"control_{action}", None)
+    if val is not None and str(val).strip():
+        return str(val).strip()
+
+    # Compatibilidad con claves históricas en la base de datos
+    if action == ACTION_NAV_LETTER_BACK:
+        old = db.get_setting("control_nav_letter", None)
+        if old:
+            return str(old).strip()
+    elif action == ACTION_NAV_STEP5_BACK:
+        old = db.get_setting("control_page_up", None)
+        if old:
+            return str(old).strip()
+    elif action == ACTION_NAV_STEP5_FWD:
+        old = db.get_setting("control_page_down", None)
+        if old:
+            return str(old).strip()
+    elif action == "page_up":
+        return get_binding(db, ACTION_NAV_STEP5_BACK)
+    elif action == "page_down":
+        return get_binding(db, ACTION_NAV_STEP5_FWD)
+    elif action == "nav_letter":
+        return get_binding(db, ACTION_NAV_LETTER_FWD)
+    elif action == "nav_step5":
+        return get_binding(db, ACTION_NAV_STEP5_FWD)
+
+    return default
 
 
 def set_binding(db, action: str, key_name: str):
@@ -333,15 +378,15 @@ def reset_default_bindings(db):
     if db:
         for info in ACTIONS_INFO:
             db.set_setting(f"control_{info['id']}", info["default"])
-            db.set_setting(f"gamepad_{info['id']}", info.get("default_pad", "A"))
+            db.set_setting(f"gamepad_{info['id']}", info.get("default_pad", ""))
 
 
 def get_gamepad_binding(db, action: str) -> str:
     """Obtiene el botón de joystick configurado para una acción, o su valor predeterminado."""
-    default = "A"
+    default = ""
     for info in ACTIONS_INFO:
         if info["id"] == action:
-            default = info.get("default_pad", "A")
+            default = info.get("default_pad", "")
             break
     if db is None:
         try:
@@ -349,7 +394,33 @@ def get_gamepad_binding(db, action: str) -> str:
             db = Database()
         except Exception:
             return default
-    return db.get_setting(f"gamepad_{action}", default)
+
+    val = db.get_setting(f"gamepad_{action}", None)
+    if val is not None:
+        return str(val).strip()
+
+    if action == ACTION_NAV_LETTER_BACK:
+        old = db.get_setting("gamepad_nav_letter", None)
+        if old is not None and str(old).strip():
+            return str(old).strip()
+    elif action == ACTION_NAV_STEP5_BACK:
+        old = db.get_setting("gamepad_page_up", None)
+        if old is not None and str(old).strip():
+            return str(old).strip()
+    elif action == ACTION_NAV_STEP5_FWD:
+        old = db.get_setting("gamepad_page_down", None)
+        if old is not None and str(old).strip():
+            return str(old).strip()
+    elif action == "page_up":
+        return get_gamepad_binding(db, ACTION_NAV_STEP5_BACK)
+    elif action == "page_down":
+        return get_gamepad_binding(db, ACTION_NAV_STEP5_FWD)
+    elif action == "nav_letter":
+        return get_gamepad_binding(db, ACTION_NAV_LETTER_FWD)
+    elif action == "nav_step5":
+        return get_gamepad_binding(db, ACTION_NAV_STEP5_FWD)
+
+    return default
 
 
 def set_gamepad_binding(db, action: str, pad_btn: str):
@@ -367,7 +438,7 @@ def reset_default_gamepad_bindings(db):
     """Restablece todos los botones de joystick a sus valores predeterminados."""
     if db:
         for info in ACTIONS_INFO:
-            db.set_setting(f"gamepad_{info['id']}", info.get("default_pad", "A"))
+            db.set_setting(f"gamepad_{info['id']}", info.get("default_pad", ""))
         try:
             from retroshelf.services.gamepad import get_gamepad_manager
             get_gamepad_manager(db).refresh_bindings()
@@ -443,7 +514,7 @@ def matches_gamepad_action(pressed_inputs: set[str], action: str, db=None) -> bo
         return False
 
     assigned = get_gamepad_binding(db, action)
-    if not assigned:
+    if not assigned or assigned in ("Sin asignar", "-"):
         return False
 
     # Si es una combinación compuesta por '+' (ej: Back+Start)

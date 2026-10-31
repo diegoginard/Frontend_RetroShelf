@@ -136,12 +136,23 @@ def format_rom_folders(folders: list[str | Path] | str | None) -> str:
     return ";".join(parse_rom_folders(folders))
 
 
-def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: list[str] | str) -> list[Path]:
+def scan_rom_folder(
+    folder: str | Path | list[str | Path],
+    allowed_extensions: list[str] | str,
+    scan_subfolders: bool = True,
+    exclude_folder_if_zip: bool = False,
+) -> list[Path]:
     """
-    Escanea recursivamente una o varias carpetas en busca de archivos cuyas extensiones
+    Escanea una o varias carpetas en busca de archivos cuyas extensiones
     coincidan con la lista permitida para la lista seleccionada.
-    Soporta el token especial '<DIR>' (utilizado en MAME y arcade):
-    Toma como ROM las carpetas que no tienen un archivo .zip (o archivo coincidente) con su mismo nombre.
+
+    Parámetros:
+      - scan_subfolders: Si es True, busca de forma recursiva en subcarpetas.
+                         Si es False, busca exclusivamente en la raíz de cada carpeta configurada.
+      - exclude_folder_if_zip: Si es True y una subcarpeta contiene archivo(s) .zip (o .7z),
+                               lista únicamente el .zip y excluye el resto del contenido de la carpeta.
+                               Asimismo, si en una carpeta existe 'juego.zip' y una subcarpeta 'juego',
+                               se descarta la subcarpeta para evitar duplicar archivos auxiliares.
     """
     folder_list = parse_rom_folders(folder)
     valid_roots: list[Path] = []
@@ -180,10 +191,50 @@ def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: l
     seen_resolved: set[str] = set()
 
     for root in valid_roots:
+        abs_root = os.path.abspath(str(root)).lower()
         for dirpath, dirnames, filenames in os.walk(str(root), topdown=True):
-            # 1. Escanear archivos normales con extensiones permitidas
-            dir_zip_stems = set()
-            for fname in filenames:
+            abs_dir = os.path.abspath(dirpath).lower()
+            is_root_dir = (abs_dir == abs_root)
+
+            # Si no se permite escanear subcarpetas y ya estamos en un subdirectorio:
+            if not scan_subfolders and not is_root_dir:
+                dirnames.clear()
+                continue
+
+            # Identificar archivos .zip y .7z en este directorio
+            zip_files = [f for f in filenames if os.path.splitext(f)[1].lower() in (".zip", ".7z")]
+            has_zip_in_dir = len(zip_files) > 0
+            zip_stems = {os.path.splitext(f)[0].lower() for f in zip_files}
+
+            # 1. Filtrar los archivos a procesar según exclude_folder_if_zip
+            if exclude_folder_if_zip:
+                if not is_root_dir and has_zip_in_dir:
+                    # En una subcarpeta que contiene .zip: listar ÚNICAMENTE los archivos .zip,
+                    # descartar cualquier otro archivo y no recorrer subdirectorios hijos.
+                    dirnames.clear()
+                    target_filenames = zip_files
+                else:
+                    # Si es el directorio raíz (o una carpeta sin .zip):
+                    # Podar de dirnames cualquier subcarpeta que comparta nombre base con un .zip
+                    if has_zip_in_dir:
+                        dirs_to_prune = [d for d in dirnames if d.lower() in zip_stems]
+                        for d in dirs_to_prune:
+                            dirnames.remove(d)
+
+                        # Excluir archivos no-zip que compartan el mismo nombre base que un .zip en esta carpeta
+                        target_filenames = []
+                        for fname in filenames:
+                            f_stem, ext = os.path.splitext(fname)
+                            if ext.lower() not in (".zip", ".7z") and f_stem.lower() in zip_stems:
+                                continue
+                            target_filenames.append(fname)
+                    else:
+                        target_filenames = filenames
+            else:
+                target_filenames = filenames
+
+            dir_zip_stems = set(zip_stems)
+            for fname in target_filenames:
                 f_stem, ext = os.path.splitext(fname)
                 ext_lower = ext.lower()
                 f_stem_lower = f_stem.lower()
@@ -192,7 +243,7 @@ def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: l
                 if ext_lower in (".zip", ".7z") or ext_lower in file_ext_set:
                     dir_zip_stems.add(f_stem_lower)
 
-                if ext_lower in file_ext_set:
+                if ext_lower in file_ext_set or (exclude_folder_if_zip and ext_lower in (".zip", ".7z")):
                     full_str = os.path.abspath(os.path.join(dirpath, fname))
                     res_key = full_str.lower()
                     if res_key not in seen_resolved:
@@ -200,7 +251,7 @@ def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: l
                         matched.append(Path(full_str))
 
             # 2. Si <DIR> está habilitado, procesar subcarpetas
-            if has_dir_token:
+            if has_dir_token and (scan_subfolders or is_root_dir):
                 dirs_to_prune = []
                 for d in dirnames:
                     # Ignorar carpetas ocultas, del sistema o auxiliares comunes
@@ -212,6 +263,14 @@ def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: l
                         continue
 
                     d_lower = d.lower()
+                    if exclude_folder_if_zip:
+                        sub_path = os.path.join(dirpath, d)
+                        try:
+                            if any(f.lower().endswith((".zip", ".7z")) for f in os.listdir(sub_path)):
+                                continue
+                        except OSError:
+                            pass
+
                     # Si ya existe un .zip (o archivo coincidente) con el mismo nombre en la carpeta,
                     # la carpeta no es una ROM independiente (es la carpeta CHD/auxiliar del .zip).
                     if d_lower in dir_zip_stems:
@@ -228,6 +287,10 @@ def scan_rom_folder(folder: str | Path | list[str | Path], allowed_extensions: l
 
                 for d in dirs_to_prune:
                     dirnames.remove(d)
+
+            # Si no se debe escanear subcarpetas, vaciar dirnames para no descender en la siguiente iteración
+            if not scan_subfolders:
+                dirnames.clear()
 
     return sorted(matched, key=lambda p: str(p).lower())
 
@@ -474,6 +537,16 @@ def _extract_entry_from_element(elem: ET.Element) -> tuple[list[str], dict] | No
 
     crc = (props.get("crc") or "").strip()
 
+    sourcefile = (
+        props.get("sourcefile")
+        or props.get("source_file")
+        or elem.attrib.get("sourcefile")
+        or elem.attrib.get("source_file")
+        or raw_children.get("sourcefile")
+        or raw_children.get("source_file")
+        or ""
+    ).strip()
+
     # Sinopsis / Notas (evitando duplicar el título cuando <description> es el nombre del juego)
     notes = (
         raw_children.get("desc")
@@ -492,6 +565,8 @@ def _extract_entry_from_element(elem: ET.Element) -> tuple[list[str], dict] | No
             clean_props[pk] = pv
     clean_props["rom_name"] = primary_rom_name
     clean_props["title"] = full_title or primary_rom_name
+    if sourcefile:
+        clean_props["sourcefile"] = sourcefile
 
     entry = {
         "title": full_title or primary_rom_name,
@@ -503,6 +578,7 @@ def _extract_entry_from_element(elem: ET.Element) -> tuple[list[str], dict] | No
         "cloneof": cloneof,
         "rating": rating,
         "crc": crc,
+        "sourcefile": sourcefile,
         "notes": notes,
         "properties": clean_props,
     }
@@ -614,6 +690,12 @@ def enrich_game_dict(row) -> dict:
         pass
     else:
         d["xml_properties"] = {}
+
+    if not d.get("sourcefile"):
+        meta = d.get("xml_properties") or {}
+        if isinstance(meta, dict) and (meta.get("sourcefile") or meta.get("source_file")):
+            d["sourcefile"] = meta.get("sourcefile") or meta.get("source_file") or ""
+
     return d
 
 
@@ -653,6 +735,7 @@ def apply_xml_to_list(db, list_id: int, xml_path: str | Path | None = None, xml_
             cloneof = info.get("cloneof") or g_dict.get("cloneof") or ""
             rating = info.get("rating") or g_dict.get("rating") or ""
             crc = info.get("crc") or g_dict.get("crc") or ""
+            sourcefile = info.get("sourcefile") or g_dict.get("sourcefile") or ""
             notes = g_dict.get("notes") or info.get("notes") or ""
             xml_metadata = json.dumps(info.get("properties", {}), ensure_ascii=False)
 
@@ -667,6 +750,7 @@ def apply_xml_to_list(db, list_id: int, xml_path: str | Path | None = None, xml_
                 cloneof=cloneof,
                 rating=rating,
                 crc=crc,
+                sourcefile=sourcefile,
                 notes=notes,
                 xml_metadata=xml_metadata,
             )
@@ -750,6 +834,7 @@ def import_scanned_games(
                             cloneof=info.get("cloneof", ""),
                             rating=info.get("rating", ""),
                             crc=info.get("crc", ""),
+                            sourcefile=info.get("sourcefile", ""),
                             notes=notes,
                             xml_metadata=xml_metadata,
                         )
@@ -768,6 +853,7 @@ def import_scanned_games(
                     cloneof = info.get("cloneof", "")
                     rating = info.get("rating", "")
                     crc = info.get("crc", "")
+                    sourcefile = info.get("sourcefile", "")
                     notes = prev_row.get("notes") or info.get("notes", "")
                     xml_metadata = json.dumps(info.get("properties", {}), ensure_ascii=False)
                     xml_matched += 1
@@ -781,6 +867,7 @@ def import_scanned_games(
                     cloneof = prev_row.get("cloneof", "")
                     rating = prev_row.get("rating", "")
                     crc = prev_row.get("crc", "")
+                    sourcefile = prev_row.get("sourcefile", "")
                     notes = prev_row.get("notes", "")
                     xml_metadata = prev_row.get("xml_metadata") or "{}"
 
@@ -796,6 +883,7 @@ def import_scanned_games(
                     cloneof=cloneof,
                     rating=rating,
                     crc=crc,
+                    sourcefile=sourcefile,
                     emulator_override_id=prev_row.get("emulator_override_id"),
                     launch_arguments=prev_row.get("launch_arguments", ""),
                     cover_path=prev_row.get("cover_path", ""),
@@ -863,6 +951,7 @@ def add_game(
                 cloneof=info.get("cloneof", ""),
                 rating=info.get("rating", ""),
                 crc=info.get("crc", ""),
+                sourcefile=info.get("sourcefile", ""),
                 notes=notes,
                 xml_metadata=xml_metadata,
             )
@@ -878,6 +967,7 @@ def add_game(
         cloneof = info.get("cloneof", "")
         rating = info.get("rating", "")
         crc = info.get("crc", "")
+        sourcefile = info.get("sourcefile", "")
         notes = info.get("notes", "")
         xml_metadata = json.dumps(info.get("properties", {}), ensure_ascii=False)
     else:
@@ -890,6 +980,7 @@ def add_game(
         cloneof = ""
         rating = ""
         crc = ""
+        sourcefile = ""
         notes = ""
         xml_metadata = "{}"
 
@@ -905,6 +996,184 @@ def add_game(
         cloneof=cloneof,
         rating=rating,
         crc=crc,
+        sourcefile=sourcefile,
         notes=notes,
         xml_metadata=xml_metadata,
     )
+
+
+# ----------------------------------------------------------------------
+# CONSTANTES Y SERVICIOS PARA LISTAS FILTRADAS
+# ----------------------------------------------------------------------
+
+FILTERABLE_FIELDS = [
+    ("sourcefile", "Archivo fuente / Driver (sourcefile)"),
+    ("genre", "Género (genre)"),
+    ("manufacturer", "Fabricante (manufacturer)"),
+    ("year", "Año (year)"),
+    ("title", "Título (title)"),
+    ("rom_name", "Nombre de ROM (rom_name)"),
+    ("players", "Jugadores (players)"),
+    ("cloneof", "Clon de (cloneof)"),
+    ("rating", "Clasificación (rating)"),
+    ("crc", "CRC"),
+    ("rom_path", "Ruta de ROM (rom_path)"),
+    ("notes", "Notas (notes)"),
+    ("emulator_override_id", "Emulador específico (ID)"),
+    ("launch_arguments", "Argumentos de lanzamiento"),
+]
+
+FILTER_OPERATORS = [
+    ("contains", "Contiene"),
+    ("not_contains", "No contiene"),
+    ("equals", "Es exactamente igual a"),
+    ("not_equals", "Es distinto de"),
+    ("starts_with", "Empieza con"),
+    ("ends_with", "Termina con"),
+    ("is_empty", "Está vacío"),
+    ("is_not_empty", "No está vacío"),
+]
+
+
+def get_game_field_value(game: dict, field: str) -> str:
+    """Extrae el valor en cadena de texto de un campo para un juego, con respaldo en xml_metadata."""
+    raw_val = game.get(field)
+    if raw_val is not None and str(raw_val).strip() != "":
+        return str(raw_val).strip()
+
+    # Si no se encuentra como campo directo, buscar en xml_metadata
+    xml_meta = game.get("xml_metadata")
+    if xml_meta and xml_meta != "{}":
+        try:
+            meta_dict = json.loads(xml_meta) if isinstance(xml_meta, str) else xml_meta
+            if isinstance(meta_dict, dict):
+                cand = meta_dict.get(field)
+                if cand is None and "_" in field:
+                    cand = meta_dict.get(field.replace("_", ""))
+                if cand is None:
+                    for k, v in meta_dict.items():
+                        if k.lower() == field.lower():
+                            cand = v
+                            break
+                if cand is not None:
+                    return str(cand).strip()
+        except Exception:
+            pass
+    return ""
+
+
+def game_matches_rule(game: dict, field: str, operator: str, target_value: str = "") -> bool:
+    """Evalúa si un juego cumple con una regla de filtrado individual."""
+    val_str = get_game_field_value(game, field)
+    op = (operator or "contains").lower()
+    target = (target_value or "").strip().lower()
+    val_lower = val_str.lower()
+
+    if op == "contains":
+        return target in val_lower if target else True
+    elif op in ("not_contains", "does_not_contain", "not contains"):
+        return target not in val_lower if target else True
+    elif op in ("equals", "eq"):
+        return val_lower == target
+    elif op in ("not_equals", "neq", "not equals"):
+        return val_lower != target
+    elif op == "starts_with":
+        return val_lower.startswith(target)
+    elif op == "ends_with":
+        return val_lower.endswith(target)
+    elif op == "is_empty":
+        return val_str == ""
+    elif op == "is_not_empty":
+        return val_str != ""
+    return False
+
+
+def game_matches_filter(game: dict, rules: list[dict], match_mode: str = "all") -> bool:
+    """
+    Evalúa si un juego cumple con un conjunto de reglas de filtrado.
+    match_mode: 'all' (AND: cumple todas las reglas) o 'any' (OR: cumple al menos una).
+    """
+    if not rules:
+        return False
+
+    valid_rules = []
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        f = (r.get("field") or "").strip()
+        op = (r.get("operator") or "contains").strip()
+        v = (r.get("value") or "").strip()
+        if not f:
+            continue
+        if op not in ("is_empty", "is_not_empty") and not v:
+            continue
+        valid_rules.append((f, op, v))
+
+    if not valid_rules:
+        return True
+
+    mode = (match_mode or "all").lower()
+    if mode == "any":
+        return any(game_matches_rule(game, f, op, v) for f, op, v in valid_rules)
+    else:
+        return all(game_matches_rule(game, f, op, v) for f, op, v in valid_rules)
+
+
+def sync_filtered_list_games(db, list_id: int) -> int:
+    """
+    Sincroniza los juegos de una lista filtrada a partir de su lista origen y sus reglas de filtrado.
+    Limpia los juegos existentes de list_id e inserta los juegos de la lista origen que cumplan el filtro.
+    Retorna la cantidad de juegos sincronizados.
+    """
+    list_info = db.get_list(list_id)
+    if not list_info or list_info.get("list_type") != "filtered":
+        return 0
+
+    source_id = list_info.get("source_list_id")
+    if not source_id:
+        return 0
+
+    raw_rules = list_info.get("filter_rules", "[]")
+    if isinstance(raw_rules, str):
+        try:
+            rules = json.loads(raw_rules)
+        except Exception:
+            rules = []
+    elif isinstance(raw_rules, list):
+        rules = raw_rules
+    else:
+        rules = []
+
+    match_mode = list_info.get("filter_match_mode", "all")
+    source_games = db.get_games(source_id, enriched=False)
+    matching_games = [g for g in source_games if game_matches_filter(g, rules, match_mode)]
+
+    db.begin_batch()
+    try:
+        db.clear_list_games(list_id)
+        for g in matching_games:
+            db.insert_game(
+                list_id,
+                title=g.get("title", ""),
+                rom_path=g.get("rom_path", ""),
+                rom_name=g.get("rom_name", ""),
+                emulator_override_id=g.get("emulator_override_id"),
+                launch_arguments=g.get("launch_arguments", ""),
+                cover_path=g.get("cover_path", ""),
+                notes=g.get("notes", ""),
+                year=g.get("year", ""),
+                manufacturer=g.get("manufacturer", ""),
+                genre=g.get("genre", ""),
+                players=g.get("players", ""),
+                cloneof=g.get("cloneof", ""),
+                rating=g.get("rating", ""),
+                crc=g.get("crc", ""),
+                sourcefile=g.get("sourcefile", ""),
+                xml_metadata=g.get("xml_metadata", "{}"),
+                created_at=g.get("created_at", ""),
+            )
+    finally:
+        db.end_batch()
+
+    return len(matching_games)
+

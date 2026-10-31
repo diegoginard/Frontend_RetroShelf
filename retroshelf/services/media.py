@@ -10,6 +10,11 @@ VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".webm", ".m4v")
 _MEDIA_DIR_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
 
 
+def clear_media_cache():
+    """Limpia la caché de índices de archivos de directorios de medios en memoria."""
+    _MEDIA_DIR_CACHE.clear()
+
+
 def _get_folder_index(folder: str | Path | None) -> dict[str, str]:
     """
     Retorna un índice en memoria {nombre_archivo_minusculas: ruta_completa} para la carpeta dada.
@@ -37,7 +42,7 @@ def _get_folder_index(folder: str | Path | None) -> dict[str, str]:
     try:
         for entry in os.scandir(folder_str):
             if entry.is_file():
-                file_map[entry.name.lower()] = entry.path
+                file_map[entry.name.lower()] = entry.path.replace("\\", "/")
     except OSError:
         pass
 
@@ -129,7 +134,7 @@ def find_media_file(folder: str | Path | None, base_name: str, extensions: tuple
     if not folder:
         return None
     if os.path.isfile(folder):
-        return str(folder)
+        return str(folder).replace("\\", "/")
     if not base_name:
         return None
     file_map = _get_folder_index(folder)
@@ -155,6 +160,7 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
     """
     media = {
         "boxart": None,
+        "flyer": None,
         "wheel": None,
         "video": None,
         "snap": None,
@@ -200,10 +206,14 @@ def resolve_game_media(*args, **kwargs) -> dict[str, str | None]:
     stem = Path(rom_path).stem if rom_path else ""
 
     if stem and row_dict:
-        # 1. Box Art
+        # 1. Box Art y Flyer
         box_folder = row_dict.get("boxart_path")
         if box_folder:
             media["boxart"] = find_media_file(box_folder, stem, IMAGE_EXTS)
+
+        flyer_folder = row_dict.get("flyer_path")
+        if flyer_folder:
+            media["flyer"] = find_media_file(flyer_folder, stem, IMAGE_EXTS)
 
         # 2. Wheel Logos
         wheel_folder = row_dict.get("wheel_path")

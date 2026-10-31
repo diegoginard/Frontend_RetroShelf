@@ -63,15 +63,20 @@ def resolve_theme_name(name: str, themes: dict[str, dict] | None = None) -> str 
     return None
 
 
-def get_available_layouts() -> list[str]:
+def get_available_layouts(for_frontend: bool = False) -> list[str]:
     """
     Retorna los nombres de todos los layouts registrados:
     primero los layouts temáticos de sistemas de la carpeta 'Layouts/',
     seguidos por los layouts genéricos (Wheel, Showcase, Grid, Banners, Detalles).
+
+    Si for_frontend es True, excluye los layouts exclusivos de configuración como 'Detalles'.
     """
     themes = get_all_theme_layouts()
     theme_names = list(themes.keys())
-    standard_names = list(STANDARD_LAYOUTS.keys())
+    if for_frontend:
+        standard_names = [name for name in STANDARD_LAYOUTS.keys() if name != "Detalles"]
+    else:
+        standard_names = list(STANDARD_LAYOUTS.keys())
     return theme_names + standard_names
 
 

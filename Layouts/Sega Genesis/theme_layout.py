@@ -328,6 +328,8 @@ class ThemeLayout(BaseLayout):
             pass
 
     def _play_select_sound(self):
+        if getattr(self, "_media_muted", False):
+            return
         try:
             if self._select_sound_effect.source().isValid():
                 self._select_sound_effect.play()
@@ -1229,6 +1231,15 @@ class ThemeLayout(BaseLayout):
 
     def set_media_muted(self, muted: bool):
         self._media_muted = muted
+        for eff_name in ("_sound_effect", "_select_sound_effect"):
+            if hasattr(self, eff_name):
+                eff = getattr(self, eff_name)
+                if eff:
+                    try:
+                        eff.setMuted(muted)
+                        eff.setVolume(0.0 if muted else 0.5)
+                    except Exception:
+                        pass
         if self.audio_output:
             try:
                 self.audio_output.setMuted(muted)

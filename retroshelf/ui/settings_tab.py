@@ -274,6 +274,12 @@ class GamepadCaptureDialog(QDialog):
 
         if "Back" in inputs and "Start" in inputs:
             btn_name = "Back+Start"
+        elif "Back" in inputs and len(inputs) > 1:
+            others = [x for x in inputs if x != "Back"]
+            btn_name = f"Back+{others[0]}"
+        elif "Start" in inputs and len(inputs) > 1:
+            others = [x for x in inputs if x != "Start"]
+            btn_name = f"Start+{others[0]}"
         else:
             btn_name = next(iter(inputs))
 
@@ -542,10 +548,13 @@ class SystemSettingsWidget(QWidget):
             self.controls_table.setItem(row, 1, item_desc)
 
             # Teclado
-            key_badge = QTableWidgetItem(f"  {info['key']}  ")
+            key_text = info['key'] if info['key'] else "Sin asignar"
+            key_badge = QTableWidgetItem(f"  {key_text}  ")
             key_badge.setTextAlignment(Qt.AlignCenter)
             key_badge.setFont(QFont("Segoe UI", 10, QFont.Bold))
             key_badge.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            if not info['key'] or info['key'] == "Sin asignar":
+                key_badge.setForeground(Qt.gray)
             self.controls_table.setItem(row, 2, key_badge)
 
             btn_change_key = QPushButton("Cambiar Tecla…")
@@ -553,10 +562,13 @@ class SystemSettingsWidget(QWidget):
             self.controls_table.setCellWidget(row, 3, btn_change_key)
 
             # Mando / Joystick
-            pad_badge = QTableWidgetItem(f"  {info['pad']}  ")
+            pad_text = info['pad'] if info['pad'] else "Sin asignar"
+            pad_badge = QTableWidgetItem(f"  {pad_text}  ")
             pad_badge.setTextAlignment(Qt.AlignCenter)
             pad_badge.setFont(QFont("Segoe UI", 10, QFont.Bold))
             pad_badge.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            if not info['pad'] or info['pad'] == "Sin asignar":
+                pad_badge.setForeground(Qt.gray)
             self.controls_table.setItem(row, 4, pad_badge)
 
             btn_change_pad = QPushButton("Cambiar Mando…")

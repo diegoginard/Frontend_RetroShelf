@@ -12,9 +12,13 @@ from ctypes import wintypes
 from PySide6.QtCore import QObject, Signal, QThread
 
 from retroshelf.services.controls import (
-    ACTIONS_INFO, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_LETTER, ACTION_NAV_STEP5,
-    ACTION_NAV_BACK, ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN, ACTION_CLOSE_EMULATOR,
-    ACTION_MUTE, ACTION_TOGGLE_FPS, GAMEPAD_ACTION_ALIASES, get_gamepad_binding, matches_gamepad_action
+    ACTIONS_INFO, ACTION_NAV_UP, ACTION_NAV_DOWN,
+    ACTION_NAV_LETTER_BACK, ACTION_NAV_LETTER_FWD,
+    ACTION_NAV_STEP5_BACK, ACTION_NAV_STEP5_FWD,
+    ACTION_NAV_BACK, ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN,
+    ACTION_CLOSE_FRONTEND, ACTION_CLOSE_EMULATOR,
+    ACTION_MUTE, ACTION_TOGGLE_FPS, GAMEPAD_ACTION_ALIASES,
+    get_gamepad_binding, matches_gamepad_action
 )
 
 # Estructuras para XInput
@@ -209,16 +213,20 @@ class GamepadPollingThread(QThread):
     def refresh_bindings(self):
         """Precarga en memoria las asignaciones de botones para evitar consultas SQLite en caliente."""
         check_order = [
+            ACTION_CLOSE_FRONTEND,
             ACTION_CLOSE_EMULATOR,
             ACTION_NAV_UP,
             ACTION_NAV_DOWN,
-            ACTION_NAV_LETTER,
-            ACTION_NAV_STEP5,
+            ACTION_NAV_LETTER_BACK,
+            ACTION_NAV_LETTER_FWD,
+            ACTION_NAV_STEP5_BACK,
+            ACTION_NAV_STEP5_FWD,
             ACTION_SELECT,
             ACTION_NAV_BACK,
             ACTION_PAGE_UP,
             ACTION_PAGE_DOWN,
             ACTION_MUTE,
+            ACTION_TOGGLE_FPS,
         ]
         bindings = {}
         for act in check_order:
@@ -285,19 +293,24 @@ class GamepadPollingThread(QThread):
 
             # Comprobar qué acción coincide con las entradas activas
             matched_action = None
-            if self._matches_action(current_inputs, ACTION_CLOSE_EMULATOR):
+            if self._matches_action(current_inputs, ACTION_CLOSE_FRONTEND):
+                matched_action = ACTION_CLOSE_FRONTEND
+            elif self._matches_action(current_inputs, ACTION_CLOSE_EMULATOR):
                 matched_action = ACTION_CLOSE_EMULATOR
             else:
                 check_order = [
                     ACTION_NAV_UP,
                     ACTION_NAV_DOWN,
-                    ACTION_NAV_LETTER,
-                    ACTION_NAV_STEP5,
+                    ACTION_NAV_LETTER_BACK,
+                    ACTION_NAV_LETTER_FWD,
+                    ACTION_NAV_STEP5_BACK,
+                    ACTION_NAV_STEP5_FWD,
                     ACTION_SELECT,
                     ACTION_NAV_BACK,
                     ACTION_PAGE_UP,
                     ACTION_PAGE_DOWN,
                     ACTION_MUTE,
+                    ACTION_TOGGLE_FPS,
                 ]
                 for act in check_order:
                     if self._matches_action(current_inputs, act):
@@ -314,6 +327,7 @@ class GamepadPollingThread(QThread):
             # Distinguir entre acciones navegables continuas y acciones de un solo toque
             repeatable_actions = {
                 ACTION_NAV_UP, ACTION_NAV_DOWN,
+                ACTION_NAV_STEP5_BACK, ACTION_NAV_STEP5_FWD,
                 ACTION_PAGE_UP, ACTION_PAGE_DOWN
             }
 

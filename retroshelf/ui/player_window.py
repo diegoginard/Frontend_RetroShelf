@@ -16,8 +16,11 @@ from retroshelf.services.library import enrich_game_dict
 from retroshelf.services.launcher import launch_game
 from retroshelf.services.controls import (
     ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_NAV_LETTER, ACTION_NAV_STEP5,
+    ACTION_NAV_LETTER_BACK, ACTION_NAV_LETTER_FWD,
+    ACTION_NAV_STEP5_BACK, ACTION_NAV_STEP5_FWD,
     ACTION_NAV_BACK, ACTION_SELECT, ACTION_PAGE_UP, ACTION_PAGE_DOWN,
-    ACTION_MUTE, ACTION_CLOSE_EMULATOR, ACTION_TOGGLE_FPS, matches_action,
+    ACTION_CLOSE_FRONTEND, ACTION_CLOSE_EMULATOR,
+    ACTION_MUTE, ACTION_TOGGLE_FPS, matches_action,
     get_binding
 )
 from retroshelf.services.gamepad import get_gamepad_manager
@@ -270,13 +273,17 @@ class PlayerWindow(QMainWindow):
             self.toggle_fps_counter()
             event.accept()
             return
+        elif matches_action(event, ACTION_CLOSE_FRONTEND, self.db):
+            self.close()
+            event.accept()
+            return
         elif matches_action(event, ACTION_NAV_BACK, self.db):
             if self.navigation_history:
                 self.go_back()
                 event.accept()
                 return
-            # Si estamos en la raíz y la tecla coincide específicamente con cerrar emulador/frontend (ej: Escape)
-            if matches_action(event, ACTION_CLOSE_EMULATOR, self.db):
+            # Si estamos en la raíz y la tecla coincide específicamente con cerrar frontend o emulador
+            if matches_action(event, ACTION_CLOSE_FRONTEND, self.db) or matches_action(event, ACTION_CLOSE_EMULATOR, self.db):
                 self.close()
                 event.accept()
                 return
@@ -287,13 +294,25 @@ class PlayerWindow(QMainWindow):
             self.close()
             event.accept()
             return
-        elif matches_action(event, ACTION_NAV_LETTER, self.db):
+        elif matches_action(event, ACTION_NAV_LETTER_BACK, self.db):
+            cur = self.layout_stack.currentWidget()
+            if cur and hasattr(cur, "jump_to_prev_letter"):
+                cur.jump_to_prev_letter()
+                event.accept()
+                return
+        elif matches_action(event, ACTION_NAV_LETTER_FWD, self.db) or matches_action(event, ACTION_NAV_LETTER, self.db):
             cur = self.layout_stack.currentWidget()
             if cur and hasattr(cur, "jump_to_next_letter"):
                 cur.jump_to_next_letter()
                 event.accept()
                 return
-        elif matches_action(event, ACTION_NAV_STEP5, self.db):
+        elif matches_action(event, ACTION_NAV_STEP5_BACK, self.db) or matches_action(event, ACTION_PAGE_UP, self.db):
+            cur = self.layout_stack.currentWidget()
+            if cur and hasattr(cur, "navigate_steps"):
+                cur.navigate_steps(-5)
+                event.accept()
+                return
+        elif matches_action(event, ACTION_NAV_STEP5_FWD, self.db) or matches_action(event, ACTION_NAV_STEP5, self.db) or matches_action(event, ACTION_PAGE_DOWN, self.db):
             cur = self.layout_stack.currentWidget()
             if cur and hasattr(cur, "navigate_steps"):
                 cur.navigate_steps(5)
@@ -308,6 +327,9 @@ class PlayerWindow(QMainWindow):
 
         if action_id == ACTION_TOGGLE_FPS:
             self.toggle_fps_counter()
+            return
+        elif action_id == ACTION_CLOSE_FRONTEND:
+            self.close()
             return
         elif action_id == ACTION_NAV_BACK:
             if self.navigation_history:
@@ -341,11 +363,27 @@ class PlayerWindow(QMainWindow):
                 row = min(current_layout.table.rowCount() - 1, current_layout.table.currentRow() + 1)
                 current_layout.table.selectRow(row)
 
-        elif action_id == ACTION_NAV_LETTER:
+        elif action_id == ACTION_NAV_LETTER_BACK:
+            if hasattr(current_layout, "jump_to_prev_letter"):
+                current_layout.jump_to_prev_letter()
+
+        elif action_id in (ACTION_NAV_LETTER_FWD, ACTION_NAV_LETTER):
             if hasattr(current_layout, "jump_to_next_letter"):
                 current_layout.jump_to_next_letter()
 
-        elif action_id == ACTION_NAV_STEP5:
+        elif action_id in (ACTION_NAV_STEP5_BACK, ACTION_PAGE_UP):
+            if hasattr(current_layout, "navigate_steps"):
+                current_layout.navigate_steps(-5)
+            elif hasattr(current_layout, "_navigate_steps"):
+                current_layout._navigate_steps(-5)
+            elif hasattr(current_layout, "wheel_list"):
+                row = max(0, current_layout.wheel_list.currentRow() - 5)
+                current_layout.wheel_list.setCurrentRow(row)
+            elif hasattr(current_layout, "table"):
+                row = max(0, current_layout.table.currentRow() - 5)
+                current_layout.table.selectRow(row)
+
+        elif action_id in (ACTION_NAV_STEP5_FWD, ACTION_NAV_STEP5, ACTION_PAGE_DOWN):
             if hasattr(current_layout, "navigate_steps"):
                 current_layout.navigate_steps(5)
             elif hasattr(current_layout, "_navigate_steps"):
@@ -356,20 +394,6 @@ class PlayerWindow(QMainWindow):
             elif hasattr(current_layout, "table"):
                 row = min(current_layout.table.rowCount() - 1, current_layout.table.currentRow() + 5)
                 current_layout.table.selectRow(row)
-
-        elif action_id == ACTION_PAGE_UP:
-            if hasattr(current_layout, "_navigate_steps"):
-                current_layout._navigate_steps(-5)
-            elif hasattr(current_layout, "wheel_list"):
-                row = max(0, current_layout.wheel_list.currentRow() - 5)
-                current_layout.wheel_list.setCurrentRow(row)
-
-        elif action_id == ACTION_PAGE_DOWN:
-            if hasattr(current_layout, "_navigate_steps"):
-                current_layout._navigate_steps(5)
-            elif hasattr(current_layout, "wheel_list"):
-                row = min(current_layout.wheel_list.count() - 1, current_layout.wheel_list.currentRow() + 5)
-                current_layout.wheel_list.setCurrentRow(row)
 
         elif action_id == ACTION_SELECT:
             if hasattr(current_layout, "get_selected_game_id"):
@@ -551,17 +575,17 @@ class PlayerWindow(QMainWindow):
         platform_name = row["platform"] or ""
         list_name = row["name"] or ""
 
-        available = get_available_layouts()
+        available = get_available_layouts(for_frontend=True)
 
-        if chosen_layout in available:
+        if chosen_layout in available and chosen_layout != "Detalles":
             target_layout = chosen_layout
         elif resolve_theme_name(chosen_layout):
             target_layout = resolve_theme_name(chosen_layout)
-        elif platform_name in available:
+        elif platform_name in available and platform_name != "Detalles":
             target_layout = platform_name
         elif resolve_theme_name(platform_name):
             target_layout = resolve_theme_name(platform_name)
-        elif list_name in available:
+        elif list_name in available and list_name != "Detalles":
             target_layout = list_name
         elif resolve_theme_name(list_name):
             target_layout = resolve_theme_name(list_name)
@@ -590,9 +614,13 @@ class PlayerWindow(QMainWindow):
         if "list_type" in row.keys() and row["list_type"] == "menu":
             menu_media_path = row["media_path"] if "media_path" in row.keys() else ""
             menu_boxart_path = row["boxart_path"] if "boxart_path" in row.keys() else ""
+            menu_flyer_path = row.get("flyer_path", "")
             menu_wheel_path = row["wheel_path"] if "wheel_path" in row.keys() else ""
             menu_video_path = row["video_path"] if "video_path" in row.keys() else ""
             menu_cartart_path = row["cartart_path"] if "cartart_path" in row.keys() else ""
+            menu_cabinet_path = row.get("cabinet_path", "")
+            menu_marquee_path = row.get("marquee_path", "")
+            menu_bezel_path = row.get("bezel_path", "")
 
             targets = self.db.get_menu_items(self.current_list_id)
             items = []
@@ -611,9 +639,13 @@ class PlayerWindow(QMainWindow):
                     "platform": platform,
                     "media_path": menu_media_path,
                     "boxart_path": menu_boxart_path,
+                    "flyer_path": menu_flyer_path,
                     "wheel_path": menu_wheel_path,
                     "video_path": menu_video_path,
                     "cartart_path": menu_cartart_path,
+                    "cabinet_path": menu_cabinet_path,
+                    "marquee_path": menu_marquee_path,
+                    "bezel_path": menu_bezel_path,
                     "menu_media_path": menu_media_path,
                     "menu_wheel_path": menu_wheel_path,
                     "menu_video_path": menu_video_path,

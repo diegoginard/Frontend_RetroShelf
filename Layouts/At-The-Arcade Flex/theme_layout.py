@@ -29,7 +29,9 @@ from retroshelf.ui.cover_utils import load_cover
 from retroshelf.services.media import find_media_file as cached_find_media_file, resolve_game_media
 from retroshelf.services.controls import (
     matches_action, ACTION_NAV_UP, ACTION_NAV_DOWN, ACTION_PAGE_UP,
-    ACTION_PAGE_DOWN, ACTION_SELECT, ACTION_MUTE, ACTION_NAV_BACK
+    ACTION_PAGE_DOWN, ACTION_SELECT, ACTION_MUTE, ACTION_NAV_BACK,
+    ACTION_NAV_LETTER_BACK, ACTION_NAV_LETTER_FWD,
+    ACTION_NAV_STEP5_BACK, ACTION_NAV_STEP5_FWD
 )
 
 LAYOUT_DIR = Path(__file__).resolve().parent
@@ -622,6 +624,14 @@ class ThemeLayout(BaseLayout):
         if window:
             self._wheel_worker.queue_games(window, priority=True)
 
+    def _reset_flyer_state(self):
+        """Reinicia el estado del flyer deslizante para que permanezca oculto fuera de pantalla."""
+        self._flyer_ready = False
+        self._flyer_slide = 1.0  # 1.0 = totalmente fuera de pantalla por la derecha
+        self._current_flyer_pix = None
+        if hasattr(self, "_flyer_delay_timer"):
+            self._flyer_delay_timer.stop()
+
     def set_games(self, games: list[dict]):
         self.games = games or []
         self._media_cache.clear()
@@ -632,9 +642,11 @@ class ThemeLayout(BaseLayout):
         self.selected_index = 0
         self._current_pos = 0.0
         self._target_pos = 0.0
+        self._reset_flyer_state()
         if self.games:
             self._preload_around(0)
             self._update_current_selection(start_video=True)
+            self._flyer_delay_timer.start(1500)
         else:
             self.current_media = {}
             self._current_marquee_pix = self._pix_marquee_default
@@ -646,9 +658,13 @@ class ThemeLayout(BaseLayout):
     def select_game_by_id(self, game_id: int):
         for idx, g in enumerate(self.games):
             if g.get("id") == game_id:
+                need_flyer_restart = (self.selected_index != idx or not self._flyer_ready)
                 self.selected_index = idx
                 self._current_pos = float(idx)
                 self._target_pos = float(idx)
+                if need_flyer_restart:
+                    self._reset_flyer_state()
+                    self._flyer_delay_timer.start(1500)
                 self._preload_around(idx)
                 self._update_current_selection(start_video=True)
                 self.update()
@@ -662,7 +678,20 @@ class ThemeLayout(BaseLayout):
     def set_media_muted(self, muted: bool):
         self._media_muted = muted
         if self.game_audio:
+            self.game_audio.setMuted(muted)
             self.game_audio.setVolume(0.0 if muted else 0.8)
+        if hasattr(self, "_sound_effect") and self._sound_effect:
+            try:
+                self._sound_effect.setMuted(muted)
+                self._sound_effect.setVolume(0.0 if muted else 0.4)
+            except Exception:
+                pass
+        if hasattr(self, "_select_sound_effect") and self._select_sound_effect:
+            try:
+                self._select_sound_effect.setMuted(muted)
+                self._select_sound_effect.setVolume(0.0 if muted else 0.5)
+            except Exception:
+                pass
 
     def pause_media(self):
         """Pausa el video gameplay y silencia el audio mientras el emulador está en ejecución."""
@@ -724,6 +753,7 @@ class ThemeLayout(BaseLayout):
         self._want_game_video_playing = False
         self._video_debounce_timer.stop()
         self._video_watchdog_timer.stop()
+        self._reset_flyer_state()
         if hasattr(self, "_art_debounce_timer"):
             self._art_debounce_timer.stop()
         if self.game_audio:
@@ -738,6 +768,7 @@ class ThemeLayout(BaseLayout):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._reset_flyer_state()
         self._init_bg_player()
         if self.bg_player and self.bg_player.playbackState() != QMediaPlayer.PlayingState:
             self.bg_player.play()
@@ -746,10 +777,12 @@ class ThemeLayout(BaseLayout):
         if self.games and 0 <= self.selected_index < len(self.games):
             self._update_current_selection(start_video=True)
             self._reset_wheel_fade()
+            self._flyer_delay_timer.start(1500)
         self.update()
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        self._reset_flyer_state()
         if not getattr(self, "_is_emulator_running", False):
             self.stop_media()
         else:
@@ -812,17 +845,24 @@ class ThemeLayout(BaseLayout):
 
     def _on_flyer_delay_timeout(self):
         if not self.games or not (0 <= self.selected_index < len(self.games)):
+            self._reset_flyer_state()
             return
-        flyer_file = self.current_media.get("flyer")
+        flyer_file = self.current_media.get("flyer") if self.current_media else None
         self._current_flyer_pix = self._get_cached_art_pixmap(flyer_file) if flyer_file else None
-        if self._current_flyer_pix is not None:
+        if self._current_flyer_pix is not None and not self._current_flyer_pix.isNull():
+            self._flyer_slide = 1.0
             self._flyer_ready = True
             if hasattr(self, "_anim_timer") and not self._anim_timer.isActive():
                 self._last_anim_time = time.perf_counter()
                 self._anim_timer.start(16)
             self.update()
+        else:
+            self._flyer_ready = False
+            self._current_flyer_pix = None
 
     def _play_nav_sound(self):
+        if getattr(self, "_media_muted", False):
+            return
         try:
             if self._sound_effect and self._sound_effect.isLoaded():
                 self._sound_effect.play()
@@ -830,6 +870,8 @@ class ThemeLayout(BaseLayout):
             pass
 
     def _play_select_sound(self):
+        if getattr(self, "_media_muted", False):
+            return
         try:
             if self._select_sound_effect and self._select_sound_effect.isLoaded():
                 self._select_sound_effect.play()
@@ -906,7 +948,8 @@ class ThemeLayout(BaseLayout):
             self.update()
         else:
             # Si todo llegó a reposo, detener el timer de animación para liberar 100% de CPU
-            if not self._flyer_ready and self._current_pos == self._target_pos and self._wheel_alpha == self._target_wheel_alpha:
+            flyer_at_rest = (not self._flyer_ready) or (self._flyer_slide <= 0.0)
+            if flyer_at_rest and self._current_pos == self._target_pos and self._wheel_alpha == self._target_wheel_alpha:
                 if hasattr(self, "_anim_timer") and self._anim_timer.isActive():
                     self._anim_timer.stop()
 
@@ -1186,7 +1229,7 @@ class ThemeLayout(BaseLayout):
         if not self._flyer_ready:
             return
         pix = self._current_flyer_pix
-        if not pix:
+        if not pix or pix.isNull():
             return
 
         # Flyer 30% más grande que el tamaño original (0.22 * 1.30 y 0.52 * 1.30)
@@ -1194,6 +1237,10 @@ class ThemeLayout(BaseLayout):
         target_h = int(h * 0.52 * 1.30)
         target_x = int(w * 0.67) + int(self._flyer_slide * (w * 0.35))
         target_y = int(h * 0.26)
+
+        # Si el flyer aún está fuera de pantalla a la derecha, omitir render
+        if target_x >= w:
+            return
 
         flyer_rect = QRect(target_x, target_y, target_w, target_h)
 
@@ -1339,11 +1386,17 @@ class ThemeLayout(BaseLayout):
         elif matches_action(event, ACTION_NAV_DOWN):
             self._navigate_steps(1, fast_repeat=fast)
             event.accept()
-        elif matches_action(event, ACTION_PAGE_UP):
+        elif matches_action(event, ACTION_NAV_STEP5_BACK) or matches_action(event, ACTION_PAGE_UP):
             self._navigate_steps(-5, fast_repeat=fast)
             event.accept()
-        elif matches_action(event, ACTION_PAGE_DOWN):
+        elif matches_action(event, ACTION_NAV_STEP5_FWD) or matches_action(event, ACTION_PAGE_DOWN):
             self._navigate_steps(5, fast_repeat=fast)
+            event.accept()
+        elif matches_action(event, ACTION_NAV_LETTER_BACK):
+            self.jump_to_prev_letter()
+            event.accept()
+        elif matches_action(event, ACTION_NAV_LETTER_FWD):
+            self.jump_to_next_letter()
             event.accept()
         elif matches_action(event, ACTION_SELECT) or key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             gid = self.get_selected_game_id()
